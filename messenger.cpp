@@ -45,14 +45,6 @@ public:
         std::vector<ChatItem> chats;
         std::ifstream in(filename_);
         if (!in) {
-            chats = {
-                {"General", {"Welcome to the messenger."}},
-                {"Dev Team", {"Push after review."}},
-                {"Design", {"New mockup is ready."}},
-                {"Random", {"Talk about anything."}},
-                {"Support", {"Server status is green."}},
-            };
-            save(chats);
             return chats;
         }
 
@@ -65,10 +57,6 @@ public:
             } else if (line.rfind("MSG:", 0) == 0 && current) {
                 current->messages.push_back(line.substr(4));
             }
-        }
-
-        if (chats.empty()) {
-            chats.push_back({"General", {"Welcome."}});
         }
 
         return chats;
@@ -295,6 +283,9 @@ int main(int argc, char** argv) {
 
         for (const auto& message : client.consumeMessages()) {
             addLog(message);
+            if (chats.empty()) {
+                chats.push_back({"Server", {}});
+            }
             chats[0].messages.push_back(message);
             if (chats[0].messages.size() > 200) chats[0].messages.erase(chats[0].messages.begin());
         }
@@ -314,12 +305,19 @@ int main(int argc, char** argv) {
         searchDot.setFillColor(sf::Color(104, 130, 158));
         window.draw(searchDot);
 
-        const int avatarCount = std::min(11, static_cast<int>(chats.size()) + 6);
+        const int avatarCount = std::min(11, static_cast<int>(chats.size()));
         for (int i = 0; i < avatarCount; ++i) {
             sf::CircleShape avatar(sx(size.x, 22.f));
             avatar.setPosition({sx(size.x, 17.f), sy(size.y, 95.f + i * 58.f)});
-            avatar.setFillColor(i == 2 ? sf::Color(58, 149, 245) : sf::Color(66 + i * 6, 90 + i * 5, 115 + i * 4));
+            avatar.setFillColor(i == 0 ? sf::Color(58, 149, 245) : sf::Color(66 + i * 8, 90 + i * 6, 120 + i * 4));
             window.draw(avatar);
+        }
+
+        if (chats.empty()) {
+            sf::Text emptyAvatars(font, "No conversations yet", static_cast<unsigned int>(sx(size.x, 12.f)));
+            emptyAvatars.setFillColor(sf::Color(120, 145, 170));
+            emptyAvatars.setPosition({sx(size.x, 8.f), sy(size.y, 96.f)});
+            window.draw(emptyAvatars);
         }
 
         sf::RectangleShape chatsBar({chatsW, static_cast<float>(size.y)});
@@ -327,12 +325,18 @@ int main(int argc, char** argv) {
         chatsBar.setFillColor(sf::Color(8, 26, 49));
         window.draw(chatsBar);
 
-        sf::Text chatTitle(font, "Chats", static_cast<unsigned int>(sx(size.x, 24.f)));
+        sf::Text chatTitle(font, "Conversations", static_cast<unsigned int>(sx(size.x, 22.f)));
         chatTitle.setPosition({iconsW + sx(size.x, 20.f), sy(size.y, 18.f)});
         chatTitle.setFillColor(sf::Color(190, 213, 235));
         window.draw(chatTitle);
 
         float y = sy(size.y, 70.f);
+        if (chats.empty()) {
+            sf::Text noChats(font, "No chats yet", static_cast<unsigned int>(sx(size.x, 16.f)));
+            noChats.setFillColor(sf::Color(145, 175, 202));
+            noChats.setPosition({iconsW + sx(size.x, 20.f), sy(size.y, 78.f)});
+            window.draw(noChats);
+        }
         for (std::size_t i = 0; i < chats.size(); ++i) {
             sf::RectangleShape itemBg({chatsW - sx(size.x, 24.f), sy(size.y, 58.f)});
             itemBg.setPosition({iconsW + sx(size.x, 12.f), y});
