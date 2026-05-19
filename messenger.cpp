@@ -4,12 +4,10 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -59,7 +57,15 @@ public:
             }
         }
 
-        return chats;
+
+        static const std::vector<std::string> fakeTitles = {"General", "Dev Team", "Design", "Random", "Support", "Server"};
+        std::vector<ChatItem> filtered;
+        for (const auto& chat : chats) {
+            const bool isFake = std::find(fakeTitles.begin(), fakeTitles.end(), chat.title) != fakeTitles.end();
+            if (!isFake) filtered.push_back(chat);
+        }
+
+        return filtered;
     }
 
     void save(const std::vector<ChatItem>& chats) {
@@ -233,8 +239,17 @@ void drawRoundedRect(sf::RenderTarget& target, const sf::FloatRect& rect, float 
     target.draw(corner);
 }
 
-float sx(unsigned int w, float v) { return v * static_cast<float>(w) / 1366.f; }
-float sy(unsigned int h, float v) { return v * static_cast<float>(h) / 768.f; }
+float scaleFactor(unsigned int w, unsigned int h) {
+    const float sx = static_cast<float>(w) / 1366.f;
+    const float sy = static_cast<float>(h) / 768.f;
+    return std::min(sx, sy);
+}
+
+float px(float value, float scale) { return value * scale; }
+unsigned int pt(unsigned int base, float scale) {
+    const auto v = static_cast<unsigned int>(static_cast<float>(base) * scale);
+    return std::max(12u, v);
+}
 
 }  // namespace
 
@@ -283,16 +298,16 @@ int main(int argc, char** argv) {
 
         for (const auto& message : client.consumeMessages()) {
             addLog(message);
-            if (chats.empty()) {
-                chats.push_back({"Server", {}});
+            if (!chats.empty()) {
+                chats[0].messages.push_back(message);
+                if (chats[0].messages.size() > 200) chats[0].messages.erase(chats[0].messages.begin());
             }
-            chats[0].messages.push_back(message);
-            if (chats[0].messages.size() > 200) chats[0].messages.erase(chats[0].messages.begin());
         }
 
         const auto size = window.getSize();
-        const float iconsW = sx(size.x, 78.f);
-        const float chatsW = sx(size.x, 280.f);
+        const float scale = scaleFactor(size.x, size.y);
+        const float iconsW = px(78.f, scale);
+        const float chatsW = px(280.f, scale);
 
         window.clear(sf::Color(3, 22, 46));
 
@@ -300,23 +315,23 @@ int main(int argc, char** argv) {
         iconsBar.setFillColor(sf::Color(22, 35, 50));
         window.draw(iconsBar);
 
-        sf::CircleShape searchDot(sx(size.x, 8.f));
-        searchDot.setPosition({sx(size.x, 24.f), sy(size.y, 28.f)});
+        sf::CircleShape searchDot(px(8.f, scale));
+        searchDot.setPosition({px(24.f, scale), px(28.f, scale)});
         searchDot.setFillColor(sf::Color(104, 130, 158));
         window.draw(searchDot);
 
         const int avatarCount = std::min(11, static_cast<int>(chats.size()));
         for (int i = 0; i < avatarCount; ++i) {
-            sf::CircleShape avatar(sx(size.x, 22.f));
-            avatar.setPosition({sx(size.x, 17.f), sy(size.y, 95.f + i * 58.f)});
+            sf::CircleShape avatar(px(22.f, scale));
+            avatar.setPosition({px(17.f, scale), px(95.f + i * 58.f, scale)});
             avatar.setFillColor(i == 0 ? sf::Color(58, 149, 245) : sf::Color(66 + i * 8, 90 + i * 6, 120 + i * 4));
             window.draw(avatar);
         }
 
         if (chats.empty()) {
-            sf::Text emptyAvatars(font, "No conversations yet", static_cast<unsigned int>(sx(size.x, 12.f)));
+            sf::Text emptyAvatars(font, "No conversations yet", pt(12, scale));
             emptyAvatars.setFillColor(sf::Color(120, 145, 170));
-            emptyAvatars.setPosition({sx(size.x, 8.f), sy(size.y, 96.f)});
+            emptyAvatars.setPosition({px(8.f, scale), px(96.f, scale)});
             window.draw(emptyAvatars);
         }
 
@@ -325,35 +340,35 @@ int main(int argc, char** argv) {
         chatsBar.setFillColor(sf::Color(8, 26, 49));
         window.draw(chatsBar);
 
-        sf::Text chatTitle(font, "Conversations", static_cast<unsigned int>(sx(size.x, 22.f)));
-        chatTitle.setPosition({iconsW + sx(size.x, 20.f), sy(size.y, 18.f)});
+        sf::Text chatTitle(font, "Conversations", pt(22, scale));
+        chatTitle.setPosition({iconsW + px(20.f, scale), px(18.f, scale)});
         chatTitle.setFillColor(sf::Color(190, 213, 235));
         window.draw(chatTitle);
 
-        float y = sy(size.y, 70.f);
+        float y = px(70.f, scale);
         if (chats.empty()) {
-            sf::Text noChats(font, "No chats yet", static_cast<unsigned int>(sx(size.x, 16.f)));
+            sf::Text noChats(font, "No chats yet", pt(16, scale));
             noChats.setFillColor(sf::Color(145, 175, 202));
-            noChats.setPosition({iconsW + sx(size.x, 20.f), sy(size.y, 78.f)});
+            noChats.setPosition({iconsW + px(20.f, scale), px(78.f, scale)});
             window.draw(noChats);
         }
         for (std::size_t i = 0; i < chats.size(); ++i) {
-            sf::RectangleShape itemBg({chatsW - sx(size.x, 24.f), sy(size.y, 58.f)});
-            itemBg.setPosition({iconsW + sx(size.x, 12.f), y});
+            sf::RectangleShape itemBg({chatsW - px(24.f, scale), px(58.f, scale)});
+            itemBg.setPosition({iconsW + px(12.f, scale), y});
             itemBg.setFillColor(i == 0 ? sf::Color(20, 51, 82) : sf::Color(12, 34, 58));
             window.draw(itemBg);
 
-            sf::Text t(font, chats[i].title, static_cast<unsigned int>(sx(size.x, 17.f)));
+            sf::Text t(font, chats[i].title, pt(17, scale));
             t.setFillColor(sf::Color(220, 235, 247));
-            t.setPosition({iconsW + sx(size.x, 22.f), y + sy(size.y, 7.f)});
+            t.setPosition({iconsW + px(22.f, scale), y + px(7.f, scale)});
             window.draw(t);
 
             const std::string preview = chats[i].messages.empty() ? "No messages yet" : chats[i].messages.back();
-            sf::Text p(font, preview, static_cast<unsigned int>(sx(size.x, 13.f)));
+            sf::Text p(font, preview, pt(13, scale));
             p.setFillColor(sf::Color(145, 175, 202));
-            p.setPosition({iconsW + sx(size.x, 22.f), y + sy(size.y, 32.f)});
+            p.setPosition({iconsW + px(22.f, scale), y + px(32.f, scale)});
             window.draw(p);
-            y += sy(size.y, 66.f);
+            y += px(66.f, scale);
         }
 
         const float workspaceX = iconsW + chatsW;
@@ -362,27 +377,27 @@ int main(int argc, char** argv) {
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
 
-        sf::FloatRect pill({workspaceX + (workspace.getSize().x - sx(size.x, 420.f)) / 2.f, workspace.getSize().y / 2.f - sy(size.y, 16.f)},
-                           {sx(size.x, 420.f), sy(size.y, 36.f)});
-        drawRoundedRect(window, pill, sx(size.x, 18.f), sf::Color(18, 50, 84));
+        sf::FloatRect pill({workspaceX + (workspace.getSize().x - px(420.f, scale)) / 2.f, workspace.getSize().y / 2.f - px(16.f, scale)},
+                           {px(420.f, scale), px(36.f, scale)});
+        drawRoundedRect(window, pill, px(18.f, scale), sf::Color(18, 50, 84));
 
-        sf::Text message(font, "Choose who you want to message", static_cast<unsigned int>(sx(size.x, 24.f)));
+        sf::Text message(font, "Choose who you want to message", pt(24, scale));
         message.setFillColor(sf::Color::White);
-        message.setPosition({pill.position.x + sx(size.x, 16.f), pill.position.y + sy(size.y, 2.f)});
+        message.setPosition({pill.position.x + px(16.f, scale), pill.position.y + px(2.f, scale)});
         window.draw(message);
 
-        sf::Text status(font, connected ? "ONLINE" : "OFFLINE", static_cast<unsigned int>(sx(size.x, 14.f)));
+        sf::Text status(font, connected ? "ONLINE" : "OFFLINE", pt(14, scale));
         status.setFillColor(connected ? sf::Color(94, 230, 131) : sf::Color(250, 117, 117));
-        status.setPosition({workspaceX + sx(size.x, 18.f), sy(size.y, 20.f)});
+        status.setPosition({workspaceX + px(18.f, scale), px(20.f, scale)});
         window.draw(status);
 
-        float logY = static_cast<float>(size.y) - sy(size.y, 190.f);
+        float logY = static_cast<float>(size.y) - px(190.f, scale);
         for (const auto& line : serverLog) {
-            sf::Text row(font, line, static_cast<unsigned int>(sx(size.x, 13.f)));
+            sf::Text row(font, line, pt(13, scale));
             row.setFillColor(sf::Color(151, 176, 204));
-            row.setPosition({workspaceX + sx(size.x, 18.f), logY});
+            row.setPosition({workspaceX + px(18.f, scale), logY});
             window.draw(row);
-            logY += sy(size.y, 20.f);
+            logY += px(20.f, scale);
         }
 
         connected = client.isConnected();
