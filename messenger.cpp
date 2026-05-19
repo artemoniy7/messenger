@@ -224,6 +224,7 @@ int main(int argc, char** argv) {
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
     float settingsAnim = 0.f;
+    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -237,6 +238,8 @@ int main(int argc, char** argv) {
 
     while (window.isOpen()) {
         const auto size = window.getSize();
+        const auto mousePixel = sf::Mouse::getPosition(window);
+        const sf::Vector2f mousePos{static_cast<float>(mousePixel.x), static_cast<float>(mousePixel.y)};
         const float uiScale = clampf(std::min(static_cast<float>(size.x) / 1366.f, static_cast<float>(size.y) / 768.f), 0.75f, 1.75f);
         const float leftW = clampf(84.f * uiScale, 70.f, 140.f);
         const float topPad = 72.f * uiScale;
@@ -382,6 +385,25 @@ int main(int argc, char** argv) {
             const auto handleBounds = profileHandle.getLocalBounds();
             profileHandle.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
             window.draw(profileHandle);
+
+            const float itemsStartY = avatarCy + avatarRadius + 96.f * uiScale;
+            const float itemH = 34.f * uiScale;
+            const float itemGap = 10.f * uiScale;
+            for (std::size_t i = 0; i < settingsItems.size(); ++i) {
+                const float itemY = itemsStartY + static_cast<float>(i) * (itemH + itemGap);
+                const sf::FloatRect itemRect({panelX + 16.f * uiScale, itemY}, {settingsPanelW - 32.f * uiScale, itemH});
+                const bool hovered = itemRect.contains(mousePos);
+
+                sf::RectangleShape itemBg(itemRect.size);
+                itemBg.setPosition(itemRect.position);
+                itemBg.setFillColor(hovered ? sf::Color(255, 255, 255, 44) : sf::Color(255, 255, 255, 16));
+                window.draw(itemBg);
+
+                sf::Text itemText(font, settingsItems[i], fontSize(14, uiScale));
+                itemText.setFillColor(hovered ? sf::Color(245, 250, 255) : sf::Color(186, 209, 230));
+                itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
+                window.draw(itemText);
+            }
         }
 
         connected = client.isConnected();
