@@ -356,10 +356,32 @@ int main(int argc, char** argv) {
             dim.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(70.f * settingsAnim)));
             window.draw(dim);
 
+            const float panelX = -settingsPanelW + settingsPanelW * settingsAnim;
             sf::RectangleShape panel({settingsPanelW, static_cast<float>(size.y)});
             panel.setFillColor(sf::Color(14, 27, 42));
-            panel.setPosition({-settingsPanelW + settingsPanelW * settingsAnim, 0.f});
+            panel.setPosition({panelX, 0.f});
             window.draw(panel);
+
+            const float avatarRadius = clampf(44.f * uiScale, 30.f, 58.f);
+            const float avatarCx = panelX + settingsPanelW * 0.5f;
+            const float avatarCy = 52.f * uiScale + avatarRadius;
+
+            sf::CircleShape profileAvatar(avatarRadius);
+            profileAvatar.setFillColor(sf::Color(58, 149, 245));
+            profileAvatar.setPosition({avatarCx - avatarRadius, avatarCy - avatarRadius});
+            window.draw(profileAvatar);
+
+            sf::Text profileName(font, "Username", fontSize(20, uiScale));
+            profileName.setFillColor(sf::Color(220, 235, 247));
+            const auto profileBounds = profileName.getLocalBounds();
+            profileName.setPosition({avatarCx - profileBounds.size.x * 0.5f, avatarCy + avatarRadius + 18.f * uiScale});
+            window.draw(profileName);
+
+            sf::Text profileHandle(font, "@username", fontSize(15, uiScale));
+            profileHandle.setFillColor(sf::Color(148, 178, 205));
+            const auto handleBounds = profileHandle.getLocalBounds();
+            profileHandle.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
+            window.draw(profileHandle);
         }
 
         connected = client.isConnected();
