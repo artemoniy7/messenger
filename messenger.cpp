@@ -40,12 +40,10 @@ class ChatStorage {
 public:
     explicit ChatStorage(std::string filename) : filename_(std::move(filename)) {}
 
-    std::vector<ChatItem> loadDefault() {
+    std::vector<ChatItem> load() {
         std::vector<ChatItem> chats;
         std::ifstream in(filename_);
-        if (!in) {
-            return chats;
-        }
+        if (!in) return chats;
 
         std::string line;
         ChatItem* current = nullptr;
@@ -58,24 +56,19 @@ public:
             }
         }
 
-
         static const std::vector<std::string> fakeTitles = {"General", "Dev Team", "Design", "Random", "Support", "Server"};
-        std::vector<ChatItem> filtered;
-        for (const auto& chat : chats) {
-            const bool isFake = std::find(fakeTitles.begin(), fakeTitles.end(), chat.title) != fakeTitles.end();
-            if (!isFake) filtered.push_back(chat);
-        }
+        chats.erase(std::remove_if(chats.begin(), chats.end(), [&](const ChatItem& c) {
+            return std::find(fakeTitles.begin(), fakeTitles.end(), c.title) != fakeTitles.end();
+        }), chats.end());
 
-        return filtered;
+        return chats;
     }
 
     void save(const std::vector<ChatItem>& chats) {
         std::ofstream out(filename_, std::ios::trunc);
         for (const auto& chat : chats) {
             out << "CHAT:" << chat.title << "\n";
-            for (const auto& msg : chat.messages) {
-                out << "MSG:" << msg << "\n";
-            }
+            for (const auto& msg : chat.messages) out << "MSG:" << msg << "\n";
         }
     }
 
@@ -90,7 +83,6 @@ public:
 
     bool connectTo(std::string_view host, int port, std::string_view username) {
         disconnect();
-
         sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (sock_ == kInvalidSocket) {
             lastError_ = "socket() failed";
@@ -100,7 +92,6 @@ public:
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port));
-
         if (::inet_pton(AF_INET, std::string(host).c_str(), &addr.sin_addr) <= 0) {
             lastError_ = "Invalid server IP";
             disconnect();
@@ -136,9 +127,7 @@ public:
 #endif
             sock_ = kInvalidSocket;
         }
-        if (receiver_.joinable()) {
-            receiver_.join();
-        }
+        if (receiver_.joinable()) receiver_.join();
     }
 
     bool sendLine(const std::string& line) {
@@ -161,7 +150,6 @@ private:
     void recvLoop() {
         std::string buffer;
         char chunk[1024];
-
         while (connected_.load()) {
             int n = static_cast<int>(::recv(sock_, chunk, sizeof(chunk), 0));
             if (n <= 0) {
@@ -174,10 +162,8 @@ private:
             while ((pos = buffer.find('\n')) != std::string::npos) {
                 std::string line = buffer.substr(0, pos);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    messages_.push_back(line);
-                }
+                std::lock_guard<std::mutex> lock(mutex_);
+                messages_.push_back(line);
                 buffer.erase(0, pos + 1);
             }
         }
@@ -185,11 +171,8 @@ private:
 
     static void initSockets() {
 #ifdef _WIN32
-        static bool initialized = false;
-        if (!initialized) {
-            WSADATA data{};
-            if (WSAStartup(MAKEWORD(2, 2), &data) == 0) initialized = true;
-        }
+        WSADATA data{};
+        WSAStartup(MAKEWORD(2, 2), &data);
 #endif
     }
 
@@ -207,49 +190,15 @@ private:
     std::string lastError_;
 };
 
-void drawRoundedRect(sf::RenderTarget& target, const sf::FloatRect& rect, float radius, const sf::Color& color) {
-    const float left = rect.position.x;
-    const float top = rect.position.y;
-    const float width = rect.size.x;
-    const float height = rect.size.y;
+float clampf(float v, float a, float b) { return std::max(a, std::min(v, b)); }
 
-    sf::RectangleShape center({width - 2.f * radius, height});
-    center.setPosition({left + radius, top});
-    center.setFillColor(color);
-    target.draw(center);
-
-    sf::RectangleShape leftRect({radius, height - 2.f * radius});
-    leftRect.setPosition({left, top + radius});
-    leftRect.setFillColor(color);
-    target.draw(leftRect);
-
-    sf::RectangleShape rightRect({radius, height - 2.f * radius});
-    rightRect.setPosition({left + width - radius, top + radius});
-    rightRect.setFillColor(color);
-    target.draw(rightRect);
-
-    sf::CircleShape corner(radius);
-    corner.setFillColor(color);
-    corner.setPosition({left, top});
-    target.draw(corner);
-    corner.setPosition({left + width - 2.f * radius, top});
-    target.draw(corner);
-    corner.setPosition({left, top + height - 2.f * radius});
-    target.draw(corner);
-    corner.setPosition({left + width - 2.f * radius, top + height - 2.f * radius});
-    target.draw(corner);
+unsigned int fontSize(unsigned int base, float s) {
+    const float scaled = static_cast<float>(base) * s;
+    return static_cast<unsigned int>(clampf(scaled, 11.f, 42.f));
 }
 
-float scaleFactor(unsigned int w, unsigned int h) {
-    const float sx = static_cast<float>(w) / 1366.f;
-    const float sy = static_cast<float>(h) / 768.f;
-    return std::min(sx, sy);
-}
-
-float px(float value, float scale) { return value * scale; }
-unsigned int pt(unsigned int base, float scale) {
-    const auto v = static_cast<unsigned int>(static_cast<float>(base) * scale);
-    return std::max(12u, v);
+sf::Color avatarColor(std::size_t i) {
+    return sf::Color(70 + static_cast<int>((i * 23) % 110), 95 + static_cast<int>((i * 37) % 100), 120 + static_cast<int>((i * 17) % 90));
 }
 
 }  // namespace
@@ -266,139 +215,124 @@ int main(int argc, char** argv) {
         "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
     bool fontLoaded = false;
     for (const auto& path : fontCandidates) {
-        if (font.openFromFile(path)) {
-            fontLoaded = true;
-            break;
-        }
+        if (font.openFromFile(path)) { fontLoaded = true; break; }
     }
     if (!fontLoaded) return 1;
 
     ChatStorage storage("chat_history.txt");
-    std::vector<ChatItem> chats = storage.loadDefault();
+    std::vector<ChatItem> chats = storage.load();
+    std::size_t selectedChat = 0;
 
     TcpClient client;
-    const std::string username = "sfml_user";
-    bool connected = client.connectTo(serverIp, serverPort, username);
+    bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
 
     std::vector<std::string> serverLog;
     auto addLog = [&](const std::string& line) {
         serverLog.push_back(line);
-        if (serverLog.size() > 14) serverLog.erase(serverLog.begin());
+        if (serverLog.size() > 10) serverLog.erase(serverLog.begin());
     };
-
-    if (connected) addLog("[CLIENT] Connected to " + serverIp + ":" + std::to_string(serverPort));
-    else addLog("[CLIENT] Connection failed: " + client.lastError());
+    addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
 
     while (window.isOpen()) {
+        const auto size = window.getSize();
+        const float uiScale = clampf(std::min(static_cast<float>(size.x) / 1366.f, static_cast<float>(size.y) / 768.f), 0.75f, 1.75f);
+        const float leftW = clampf(84.f * uiScale, 70.f, 140.f);
+
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 storage.save(chats);
                 window.close();
             }
+            if (const auto* pressed = event->getIf<sf::Event::MouseButtonPressed>()) {
+                if (pressed->button == sf::Mouse::Button::Left) {
+                    const float radius = clampf(22.f * uiScale, 16.f, 34.f);
+                    const float startY = 95.f * uiScale;
+                    const float stepY = 58.f * uiScale;
+                    for (std::size_t i = 0; i < chats.size(); ++i) {
+                        sf::Vector2f c{leftW * 0.5f, startY + stepY * static_cast<float>(i) + radius};
+                        const float dx = static_cast<float>(pressed->position.x) - c.x;
+                        const float dy = static_cast<float>(pressed->position.y) - c.y;
+                        if (dx * dx + dy * dy <= radius * radius) {
+                            selectedChat = i;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         for (const auto& message : client.consumeMessages()) {
             addLog(message);
-            if (!chats.empty()) {
-                chats[0].messages.push_back(message);
-                if (chats[0].messages.size() > 200) chats[0].messages.erase(chats[0].messages.begin());
+            if (selectedChat < chats.size()) {
+                chats[selectedChat].messages.push_back(message);
             }
         }
 
-        const auto size = window.getSize();
-        const float scale = scaleFactor(size.x, size.y);
-        const float iconsW = px(78.f, scale);
-        const float chatsW = px(280.f, scale);
-
         window.clear(sf::Color(3, 22, 46));
 
-        sf::RectangleShape iconsBar({iconsW, static_cast<float>(size.y)});
-        iconsBar.setFillColor(sf::Color(22, 35, 50));
-        window.draw(iconsBar);
+        sf::RectangleShape avatarsBar({leftW, static_cast<float>(size.y)});
+        avatarsBar.setFillColor(sf::Color(18, 33, 49));
+        window.draw(avatarsBar);
 
-        sf::CircleShape searchDot(px(8.f, scale));
-        searchDot.setPosition({px(24.f, scale), px(28.f, scale)});
-        searchDot.setFillColor(sf::Color(104, 130, 158));
-        window.draw(searchDot);
-
-        const int avatarCount = std::min(11, static_cast<int>(chats.size()));
-        for (int i = 0; i < avatarCount; ++i) {
-            sf::CircleShape avatar(px(22.f, scale));
-            avatar.setPosition({px(17.f, scale), px(95.f + i * 58.f, scale)});
-            avatar.setFillColor(i == 0 ? sf::Color(58, 149, 245) : sf::Color(66 + i * 8, 90 + i * 6, 120 + i * 4));
+        const float radius = clampf(22.f * uiScale, 16.f, 34.f);
+        const float startY = 95.f * uiScale;
+        const float stepY = 58.f * uiScale;
+        for (std::size_t i = 0; i < chats.size(); ++i) {
+            sf::CircleShape avatar(radius);
+            avatar.setPosition({leftW * 0.5f - radius, startY + stepY * static_cast<float>(i)});
+            avatar.setFillColor(i == selectedChat ? sf::Color(58, 149, 245) : avatarColor(i));
             window.draw(avatar);
         }
 
         if (chats.empty()) {
-            sf::Text emptyAvatars(font, "No conversations yet", pt(12, scale));
-            emptyAvatars.setFillColor(sf::Color(120, 145, 170));
-            emptyAvatars.setPosition({px(8.f, scale), px(96.f, scale)});
-            window.draw(emptyAvatars);
-        }
-
-        sf::RectangleShape chatsBar({chatsW, static_cast<float>(size.y)});
-        chatsBar.setPosition({iconsW, 0.f});
-        chatsBar.setFillColor(sf::Color(8, 26, 49));
-        window.draw(chatsBar);
-
-        sf::Text chatTitle(font, "Conversations", pt(22, scale));
-        chatTitle.setPosition({iconsW + px(20.f, scale), px(18.f, scale)});
-        chatTitle.setFillColor(sf::Color(190, 213, 235));
-        window.draw(chatTitle);
-
-        float y = px(70.f, scale);
-        if (chats.empty()) {
-            sf::Text noChats(font, "No chats yet", pt(16, scale));
-            noChats.setFillColor(sf::Color(145, 175, 202));
-            noChats.setPosition({iconsW + px(20.f, scale), px(78.f, scale)});
-            window.draw(noChats);
-        }
-        for (std::size_t i = 0; i < chats.size(); ++i) {
-            sf::RectangleShape itemBg({chatsW - px(24.f, scale), px(58.f, scale)});
-            itemBg.setPosition({iconsW + px(12.f, scale), y});
-            itemBg.setFillColor(i == 0 ? sf::Color(20, 51, 82) : sf::Color(12, 34, 58));
-            window.draw(itemBg);
-
-            sf::Text t(font, chats[i].title, pt(17, scale));
-            t.setFillColor(sf::Color(220, 235, 247));
-            t.setPosition({iconsW + px(22.f, scale), y + px(7.f, scale)});
+            sf::Text t(font, "No chats yet", fontSize(13, uiScale));
+            t.setFillColor(sf::Color(130, 155, 180));
+            t.setPosition({8.f, startY});
             window.draw(t);
-
-            const std::string preview = chats[i].messages.empty() ? "No messages yet" : chats[i].messages.back();
-            sf::Text p(font, preview, pt(13, scale));
-            p.setFillColor(sf::Color(145, 175, 202));
-            p.setPosition({iconsW + px(22.f, scale), y + px(32.f, scale)});
-            window.draw(p);
-            y += px(66.f, scale);
         }
 
-        const float workspaceX = iconsW + chatsW;
-        sf::RectangleShape workspace({static_cast<float>(size.x) - workspaceX, static_cast<float>(size.y)});
-        workspace.setPosition({workspaceX, 0.f});
+        const float chatX = leftW;
+        sf::RectangleShape workspace({static_cast<float>(size.x) - chatX, static_cast<float>(size.y)});
+        workspace.setPosition({chatX, 0.f});
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
 
-        sf::FloatRect pill({workspaceX + (workspace.getSize().x - px(420.f, scale)) / 2.f, workspace.getSize().y / 2.f - px(16.f, scale)},
-                           {px(420.f, scale), px(36.f, scale)});
-        drawRoundedRect(window, pill, px(18.f, scale), sf::Color(18, 50, 84));
+        sf::Text title(font, selectedChat < chats.size() ? chats[selectedChat].title : "Select a chat", fontSize(24, uiScale));
+        title.setFillColor(sf::Color(210, 228, 245));
+        title.setPosition({chatX + 20.f * uiScale, 16.f * uiScale});
+        window.draw(title);
 
-        sf::Text message(font, "Choose who you want to message", pt(24, scale));
-        message.setFillColor(sf::Color::White);
-        message.setPosition({pill.position.x + px(16.f, scale), pill.position.y + px(2.f, scale)});
-        window.draw(message);
-
-        sf::Text status(font, connected ? "ONLINE" : "OFFLINE", pt(14, scale));
+        sf::Text status(font, connected ? "ONLINE" : "OFFLINE", fontSize(14, uiScale));
         status.setFillColor(connected ? sf::Color(94, 230, 131) : sf::Color(250, 117, 117));
-        status.setPosition({workspaceX + px(18.f, scale), px(20.f, scale)});
+        status.setPosition({chatX + 24.f * uiScale, 52.f * uiScale});
         window.draw(status);
 
-        float logY = static_cast<float>(size.y) - px(190.f, scale);
+        float y = 96.f * uiScale;
+        if (selectedChat < chats.size() && !chats[selectedChat].messages.empty()) {
+            const auto& msgs = chats[selectedChat].messages;
+            const std::size_t maxLines = 20;
+            std::size_t from = msgs.size() > maxLines ? msgs.size() - maxLines : 0;
+            for (std::size_t i = from; i < msgs.size(); ++i) {
+                sf::Text row(font, msgs[i], fontSize(14, uiScale));
+                row.setFillColor(sf::Color(170, 196, 220));
+                row.setPosition({chatX + 20.f * uiScale, y});
+                window.draw(row);
+                y += 24.f * uiScale;
+            }
+        } else {
+            sf::Text placeholder(font, "Choose who you want to message", fontSize(22, uiScale));
+            placeholder.setFillColor(sf::Color(190, 210, 230));
+            placeholder.setPosition({chatX + (workspace.getSize().x * 0.5f) - 220.f * uiScale, workspace.getSize().y * 0.5f});
+            window.draw(placeholder);
+        }
+
+        float logY = static_cast<float>(size.y) - (serverLog.size() * (18.f * uiScale)) - 12.f * uiScale;
         for (const auto& line : serverLog) {
-            sf::Text row(font, line, pt(13, scale));
-            row.setFillColor(sf::Color(151, 176, 204));
-            row.setPosition({workspaceX + px(18.f, scale), logY});
+            sf::Text row(font, line, fontSize(12, uiScale));
+            row.setFillColor(sf::Color(120, 150, 176));
+            row.setPosition({chatX + 20.f * uiScale, logY});
             window.draw(row);
-            logY += px(20.f, scale);
+            logY += 18.f * uiScale;
         }
 
         connected = client.isConnected();
