@@ -1,5 +1,6 @@
 #include <SFML/Graphics.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
