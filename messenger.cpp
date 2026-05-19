@@ -165,31 +165,36 @@ private:
 };
 
 void drawRoundedRect(sf::RenderTarget& target, const sf::FloatRect& rect, float radius, const sf::Color& color) {
-    sf::RectangleShape center({rect.width - 2.f * radius, rect.height});
-    center.setPosition({rect.left + radius, rect.top});
+    const float left = rect.position.x;
+    const float top = rect.position.y;
+    const float width = rect.size.x;
+    const float height = rect.size.y;
+
+    sf::RectangleShape center({width - 2.f * radius, height});
+    center.setPosition({left + radius, top});
     center.setFillColor(color);
     target.draw(center);
 
-    sf::RectangleShape left({radius, rect.height - 2.f * radius});
-    left.setPosition({rect.left, rect.top + radius});
-    left.setFillColor(color);
-    target.draw(left);
+    sf::RectangleShape leftRect({radius, height - 2.f * radius});
+    leftRect.setPosition({left, top + radius});
+    leftRect.setFillColor(color);
+    target.draw(leftRect);
 
-    sf::RectangleShape right({radius, rect.height - 2.f * radius});
-    right.setPosition({rect.left + rect.width - radius, rect.top + radius});
-    right.setFillColor(color);
-    target.draw(right);
+    sf::RectangleShape rightRect({radius, height - 2.f * radius});
+    rightRect.setPosition({left + width - radius, top + radius});
+    rightRect.setFillColor(color);
+    target.draw(rightRect);
 
     sf::CircleShape corner(radius);
     corner.setFillColor(color);
 
-    corner.setPosition({rect.left, rect.top});
+    corner.setPosition({left, top});
     target.draw(corner);
-    corner.setPosition({rect.left + rect.width - 2.f * radius, rect.top});
+    corner.setPosition({left + width - 2.f * radius, top});
     target.draw(corner);
-    corner.setPosition({rect.left, rect.top + rect.height - 2.f * radius});
+    corner.setPosition({left, top + height - 2.f * radius});
     target.draw(corner);
-    corner.setPosition({rect.left + rect.width - 2.f * radius, rect.top + rect.height - 2.f * radius});
+    corner.setPosition({left + width - 2.f * radius, top + height - 2.f * radius});
     target.draw(corner);
 }
 
@@ -321,7 +326,7 @@ int main(int argc, char** argv) {
 
         sf::Text message(font, "Выберите, кому хотели бы написать", 24);
         message.setFillColor(sf::Color::White);
-        message.setPosition({pill.left + 16.f, pill.top + 2.f});
+        message.setPosition({pill.position.x + 16.f, pill.position.y + 2.f});
         window.draw(message);
 
         sf::Text status(font, connected ? "ONLINE" : "OFFLINE", 14);
