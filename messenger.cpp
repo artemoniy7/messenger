@@ -223,6 +223,7 @@ int main(int argc, char** argv) {
     std::vector<ChatItem> chats = storage.load();
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
+    float settingsAnim = 0.f;
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -317,30 +318,13 @@ int main(int argc, char** argv) {
             window.draw(avatar);
         }
 
-        if (chats.empty()) {
-            sf::Text t(font, "No chats yet", fontSize(13, uiScale));
-            t.setFillColor(sf::Color(130, 155, 180));
-            t.setPosition({8.f, startY});
-            window.draw(t);
-        }
-
         const float chatX = leftW;
         sf::RectangleShape workspace({static_cast<float>(size.x) - chatX, static_cast<float>(size.y)});
         workspace.setPosition({chatX, 0.f});
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
 
-        sf::Text title(font, selectedChat < chats.size() ? chats[selectedChat].title : "Select a chat", fontSize(24, uiScale));
-        title.setFillColor(sf::Color(210, 228, 245));
-        title.setPosition({chatX + 20.f * uiScale, 16.f * uiScale});
-        window.draw(title);
-
-        sf::Text status(font, connected ? "ONLINE" : "OFFLINE", fontSize(14, uiScale));
-        status.setFillColor(connected ? sf::Color(94, 230, 131) : sf::Color(250, 117, 117));
-        status.setPosition({chatX + 24.f * uiScale, 52.f * uiScale});
-        window.draw(status);
-
-        float y = 96.f * uiScale;
+        float y = 28.f * uiScale;
         if (selectedChat < chats.size() && !chats[selectedChat].messages.empty()) {
             const auto& msgs = chats[selectedChat].messages;
             const std::size_t maxLines = 20;
@@ -352,11 +336,6 @@ int main(int argc, char** argv) {
                 window.draw(row);
                 y += 24.f * uiScale;
             }
-        } else {
-            sf::Text placeholder(font, "Choose who you want to message", fontSize(22, uiScale));
-            placeholder.setFillColor(sf::Color(190, 210, 230));
-            placeholder.setPosition({chatX + (workspace.getSize().x * 0.5f) - 220.f * uiScale, workspace.getSize().y * 0.5f});
-            window.draw(placeholder);
         }
 
         float logY = static_cast<float>(size.y) - (serverLog.size() * (18.f * uiScale)) - 12.f * uiScale;
@@ -369,25 +348,18 @@ int main(int argc, char** argv) {
         }
 
 
-        if (settingsOpen) {
+        const float targetAnim = settingsOpen ? 1.f : 0.f;
+        settingsAnim += (targetAnim - settingsAnim) * 0.18f;
+
+        if (settingsAnim > 0.01f) {
             sf::RectangleShape dim({static_cast<float>(size.x), static_cast<float>(size.y)});
-            dim.setFillColor(sf::Color(0, 0, 0, 70));
+            dim.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(70.f * settingsAnim)));
             window.draw(dim);
 
             sf::RectangleShape panel({settingsPanelW, static_cast<float>(size.y)});
             panel.setFillColor(sf::Color(14, 27, 42));
-            panel.setPosition({0.f, 0.f});
+            panel.setPosition({-settingsPanelW + settingsPanelW * settingsAnim, 0.f});
             window.draw(panel);
-
-            sf::Text settingsTitle(font, "Settings", fontSize(24, uiScale));
-            settingsTitle.setFillColor(sf::Color(215, 232, 248));
-            settingsTitle.setPosition({20.f * uiScale, 18.f * uiScale});
-            window.draw(settingsTitle);
-
-            sf::Text hint(font, "Click outside this panel to close", fontSize(13, uiScale));
-            hint.setFillColor(sf::Color(145, 172, 198));
-            hint.setPosition({20.f * uiScale, 58.f * uiScale});
-            window.draw(hint);
         }
 
         connected = client.isConnected();
