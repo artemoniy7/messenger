@@ -321,7 +321,8 @@ int main(int argc, char** argv) {
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
 
-        sf::FloatRect pill{workspaceX + (workspace.getSize().x - 420.f) / 2.f, workspace.getSize().y / 2.f - 16.f, 420.f, 36.f};
+        sf::FloatRect pill({workspaceX + (workspace.getSize().x - 420.f) / 2.f, workspace.getSize().y / 2.f - 16.f},
+                           {420.f, 36.f});
         drawRoundedRect(window, pill, 18.f, sf::Color(18, 50, 84));
 
         sf::Text message(font, "Выберите, кому хотели бы написать", 24);
