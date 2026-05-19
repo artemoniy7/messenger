@@ -2,18 +2,30 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <mutex>
-#include <netinet/in.h>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+using SocketHandle = SOCKET;
+constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+using SocketHandle = int;
+constexpr SocketHandle kInvalidSocket = -1;
+#endif
 
 namespace {
 
@@ -24,13 +36,14 @@ struct ChatItem {
 
 class TcpClient {
 public:
-    ~TcpClient() { disconnect(); }
+    TcpClient() { initSockets(); }
+    ~TcpClient() { disconnect(); cleanupSockets(); }
 
     bool connectTo(std::string_view host, int port, std::string_view username) {
         disconnect();
 
         sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock_ < 0) {
+        if (sock_ == kInvalidSocket) {
             lastError_ = "socket() failed";
             return false;
         }
@@ -64,10 +77,15 @@ public:
 
     void disconnect() {
         connected_.store(false);
-        if (sock_ >= 0) {
+        if (sock_ != kInvalidSocket) {
+#ifdef _WIN32
+            ::shutdown(sock_, SD_BOTH);
+            ::closesocket(sock_);
+#else
             ::shutdown(sock_, SHUT_RDWR);
             ::close(sock_);
-            sock_ = -1;
+#endif
+            sock_ = kInvalidSocket;
         }
         if (receiver_.joinable()) {
             receiver_.join();
@@ -75,7 +93,7 @@ public:
     }
 
     bool sendLine(const std::string& line) {
-        if (sock_ < 0) return false;
+        if (sock_ == kInvalidSocket) return false;
         std::string data = line + "\n";
         return ::send(sock_, data.c_str(), data.size(), 0) >= 0;
     }
@@ -96,7 +114,7 @@ private:
         char chunk[1024];
 
         while (connected_.load()) {
-            ssize_t n = ::recv(sock_, chunk, sizeof(chunk), 0);
+            int n = static_cast<int>(::recv(sock_, chunk, sizeof(chunk), 0));
             if (n <= 0) {
                 connected_.store(false);
                 break;
@@ -120,7 +138,25 @@ private:
         }
     }
 
-    int sock_ = -1;
+    static void initSockets() {
+#ifdef _WIN32
+        static bool initialized = false;
+        if (!initialized) {
+            WSADATA data{};
+            if (WSAStartup(MAKEWORD(2, 2), &data) == 0) {
+                initialized = true;
+            }
+        }
+#endif
+    }
+
+    static void cleanupSockets() {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+    }
+
+    SocketHandle sock_ = kInvalidSocket;
     std::atomic<bool> connected_{false};
     std::thread receiver_;
     std::mutex mutex_;
@@ -167,8 +203,22 @@ int main(int argc, char** argv) {
     window.setFramerateLimit(60);
 
     sf::Font font;
-    if (!font.openFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
-        std::cerr << "Font not found\n";
+    const std::vector<std::string> fontCandidates = {
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    };
+
+    bool fontLoaded = false;
+    for (const auto& path : fontCandidates) {
+        if (font.openFromFile(path)) {
+            fontLoaded = true;
+            break;
+        }
+    }
+
+    if (!fontLoaded) {
+        std::cerr << "Font not found (tried Windows/Linux defaults)\n";
         return 1;
     }
 
