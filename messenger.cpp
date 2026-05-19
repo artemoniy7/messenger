@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
     ChatStorage storage("chat_history.txt");
     std::vector<ChatItem> chats = storage.load();
     std::size_t selectedChat = 0;
+    bool settingsOpen = false;
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -237,6 +238,9 @@ int main(int argc, char** argv) {
         const auto size = window.getSize();
         const float uiScale = clampf(std::min(static_cast<float>(size.x) / 1366.f, static_cast<float>(size.y) / 768.f), 0.75f, 1.75f);
         const float leftW = clampf(84.f * uiScale, 70.f, 140.f);
+        const float topPad = 72.f * uiScale;
+        const float settingsBtnH = 38.f * uiScale;
+        const float settingsPanelW = 280.f * uiScale;
 
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
@@ -245,13 +249,30 @@ int main(int argc, char** argv) {
             }
             if (const auto* pressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                 if (pressed->button == sf::Mouse::Button::Left) {
+                    const float mx = static_cast<float>(pressed->position.x);
+                    const float my = static_cast<float>(pressed->position.y);
+
+                    const bool onSettingsButton = (mx >= 8.f * uiScale && mx <= leftW - 8.f * uiScale && my >= 12.f * uiScale && my <= 12.f * uiScale + settingsBtnH);
+                    if (onSettingsButton) {
+                        settingsOpen = true;
+                        continue;
+                    }
+
+                    if (settingsOpen) {
+                        const bool insidePanel = (mx <= settingsPanelW);
+                        if (!insidePanel) {
+                            settingsOpen = false;
+                            continue;
+                        }
+                    }
+
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
-                    const float startY = 95.f * uiScale;
+                    const float startY = topPad + 28.f * uiScale;
                     const float stepY = 58.f * uiScale;
                     for (std::size_t i = 0; i < chats.size(); ++i) {
                         sf::Vector2f c{leftW * 0.5f, startY + stepY * static_cast<float>(i) + radius};
-                        const float dx = static_cast<float>(pressed->position.x) - c.x;
-                        const float dy = static_cast<float>(pressed->position.y) - c.y;
+                        const float dx = mx - c.x;
+                        const float dy = my - c.y;
                         if (dx * dx + dy * dy <= radius * radius) {
                             selectedChat = i;
                             break;
@@ -274,8 +295,20 @@ int main(int argc, char** argv) {
         avatarsBar.setFillColor(sf::Color(18, 33, 49));
         window.draw(avatarsBar);
 
+        sf::RectangleShape settingsButton({leftW - 16.f * uiScale, settingsBtnH});
+        settingsButton.setPosition({8.f * uiScale, 12.f * uiScale});
+        settingsButton.setFillColor(sf::Color(27, 48, 69));
+        window.draw(settingsButton);
+
+        for (int i = 0; i < 3; ++i) {
+            sf::RectangleShape line({(leftW - 40.f * uiScale), 3.f * uiScale});
+            line.setPosition({20.f * uiScale, 20.f * uiScale + i * 9.f * uiScale});
+            line.setFillColor(sf::Color(185, 205, 225));
+            window.draw(line);
+        }
+
         const float radius = clampf(22.f * uiScale, 16.f, 34.f);
-        const float startY = 95.f * uiScale;
+        const float startY = topPad + 28.f * uiScale;
         const float stepY = 58.f * uiScale;
         for (std::size_t i = 0; i < chats.size(); ++i) {
             sf::CircleShape avatar(radius);
@@ -333,6 +366,28 @@ int main(int argc, char** argv) {
             row.setPosition({chatX + 20.f * uiScale, logY});
             window.draw(row);
             logY += 18.f * uiScale;
+        }
+
+
+        if (settingsOpen) {
+            sf::RectangleShape dim({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dim.setFillColor(sf::Color(0, 0, 0, 70));
+            window.draw(dim);
+
+            sf::RectangleShape panel({settingsPanelW, static_cast<float>(size.y)});
+            panel.setFillColor(sf::Color(14, 27, 42));
+            panel.setPosition({0.f, 0.f});
+            window.draw(panel);
+
+            sf::Text settingsTitle(font, "Settings", fontSize(24, uiScale));
+            settingsTitle.setFillColor(sf::Color(215, 232, 248));
+            settingsTitle.setPosition({20.f * uiScale, 18.f * uiScale});
+            window.draw(settingsTitle);
+
+            sf::Text hint(font, "Click outside this panel to close", fontSize(13, uiScale));
+            hint.setFillColor(sf::Color(145, 172, 198));
+            hint.setPosition({20.f * uiScale, 58.f * uiScale});
+            window.draw(hint);
         }
 
         connected = client.isConnected();
