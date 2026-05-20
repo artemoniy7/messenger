@@ -106,6 +106,9 @@ class ChatServer:
         discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
         discovery_thread.start()
 
+        discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
+        discovery_thread.start()
+
         try:
             while self._running.is_set():
                 self.server_sock.settimeout(1.0)
