@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Simple LAN messenger server.
-
-Protocol (UTF-8, newline-delimited):
-- client sends first line: username
-- server replies with: OK <your_name>
-- then each incoming line is broadcast as: [HH:MM:SS] <name>: <message>
-
-Admin commands from client:
-- /name NEW_NAME  -> rename client
-- /quit           -> disconnect
-"""
+"""Simple LAN messenger server with broadcast discovery."""
 
 from __future__ import annotations
 
@@ -42,24 +32,82 @@ class ChatServer:
         self._lock = threading.Lock()
         self._running = threading.Event()
         self._running.set()
+        
+        self._discovery_sock: Optional[socket.socket] = None
+        self._server_ip = self._get_local_ip()
+
+    def _get_local_ip(self) -> str:
+        """Get the actual local IP address of the server."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            print(f"[INFO] Server IP detected: {ip}")
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def start_discovery(self) -> None:
+        """Starts UDP broadcast listener for server discovery."""
+        try:
+            self._discovery_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            # Android requires this for broadcast
+            self._discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            
+            # Bind to all interfaces
+            self._discovery_sock.bind(('', DISCOVERY_PORT))
+            
+            thread = threading.Thread(target=self._discovery_listener, daemon=True)
+            thread.start()
+            print(f"[INFO] Discovery listener started on UDP port {DISCOVERY_PORT}")
+            print(f"[INFO] Server will respond with IP: {self._server_ip}")
+        except Exception as e:
+            print(f"[WARN] Could not start discovery listener: {e}")
+
+    def _discovery_listener(self) -> None:
+        """Listens for discovery requests and responds."""
+        while self._running.is_set():
+            try:
+                self._discovery_sock.settimeout(1.0)
+                data, addr = self._discovery_sock.recvfrom(1024)
+                
+                if data == DISCOVERY_QUERY:
+                    response = f"MESSENGER_SERVER {self._server_ip}:{self.port}".encode('utf-8')
+                    self._discovery_sock.sendto(response, addr)
+                    print(f"[INFO] Discovery response sent to {addr[0]}:{addr[1]} -> {self._server_ip}:{self.port}")
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self._running.is_set():
+                    print(f"[WARN] Discovery error: {e}")
 
     def start(self) -> None:
         self.server_sock.bind((self.host, self.port))
         self.server_sock.listen()
-        print(f"[INFO] Server started on {self.host}:{self.port}")
+        self.start_discovery()
+        print(f"[INFO] Server started on {self._server_ip}:{self.port}")
+        print(f"[INFO] Connect with: ./messenger {self._server_ip} {self.port}")
 
         discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
         discovery_thread.start()
 
         try:
             while self._running.is_set():
-                client_sock, addr = self.server_sock.accept()
-                thread = threading.Thread(
-                    target=self._handle_client,
-                    args=(client_sock, addr),
-                    daemon=True,
-                )
-                thread.start()
+                self.server_sock.settimeout(1.0)
+                try:
+                    client_sock, addr = self.server_sock.accept()
+                    print(f"[INFO] Client connected from {addr[0]}:{addr[1]}")
+                    thread = threading.Thread(
+                        target=self._handle_client,
+                        args=(client_sock, addr),
+                        daemon=True,
+                    )
+                    thread.start()
+                except socket.timeout:
+                    continue
         except KeyboardInterrupt:
             print("\n[INFO] Keyboard interrupt received, shutting down...")
         finally:
@@ -70,6 +118,12 @@ class ChatServer:
             return
 
         self._running.clear()
+
+        if self._discovery_sock:
+            try:
+                self._discovery_sock.close()
+            except OSError:
+                pass
 
         with self._lock:
             clients = list(self._clients_by_sock.values())
@@ -221,7 +275,7 @@ class ChatServer:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LAN messenger server")
+    parser = argparse.ArgumentParser(description="LAN messenger server with auto-discovery")
     parser.add_argument("--host", default="0.0.0.0", help="Host/IP to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=5000, help="Port to bind (default: 5000)")
     return parser.parse_args()
