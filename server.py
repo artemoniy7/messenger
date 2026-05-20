@@ -91,6 +91,9 @@ class ChatServer:
         print(f"[INFO] Server started on {self._server_ip}:{self.port}")
         print(f"[INFO] Connect with: ./messenger {self._server_ip} {self.port}")
 
+        discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
+        discovery_thread.start()
+
         try:
             while self._running.is_set():
                 self.server_sock.settimeout(1.0)
@@ -142,6 +145,36 @@ class ChatServer:
             pass
 
         print("[INFO] Server stopped")
+
+
+    def _discovery_loop(self) -> None:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((self.host, DISCOVERY_PORT))
+        except OSError:
+            # fallback for hosts like 0.0.0.0 / mobile runtimes
+            sock.bind(("", DISCOVERY_PORT))
+
+        while self._running.is_set():
+            try:
+                data, addr = sock.recvfrom(1024)
+            except OSError:
+                break
+
+            if data != DISCOVERY_QUERY:
+                continue
+
+            response = f"MESSENGER_SERVER {self.port}".encode("utf-8")
+            try:
+                sock.sendto(response, addr)
+            except OSError:
+                pass
+
+        try:
+            sock.close()
+        except OSError:
+            pass
 
     def _register_client(self, client_sock: socket.socket, addr: tuple[str, int], name: str) -> Client:
         client = Client(sock=client_sock, addr=addr, name=name)

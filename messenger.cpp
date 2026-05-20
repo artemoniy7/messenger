@@ -14,6 +14,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <set>
+#include <future>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -246,7 +248,14 @@ bool canConnectFast(const std::string& ip, int port, int timeoutMs) {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<uint16_t>(port));
-    if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) return false;
+    if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return false;
+    }
     int rc = ::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
 #ifdef _WIN32
     if (rc == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) { closesocket(s); return false; }
@@ -270,20 +279,34 @@ bool canConnectFast(const std::string& ip, int port, int timeoutMs) {
     return ok;
 }
 
+std::vector<std::string> candidatePrefixes() {
+    std::set<std::string> prefixes = {"192.168.0.", "192.168.1.", "10.0.0.", "10.0.1.", "172.16.0.", "172.20.10."};
+    if (auto p = localPrefix(); p.has_value()) prefixes.insert(*p);
+    return std::vector<std::string>(prefixes.begin(), prefixes.end());
+}
+
+std::optional<std::string> scanPrefix(const std::string& prefix, int port, int timeoutMs) {
+    for (int i = 1; i <= 254; ++i) {
+        std::string ip = prefix + std::to_string(i);
+        if (canConnectFast(ip, port, timeoutMs)) return ip;
+    }
+    return std::nullopt;
+}
+
 std::string discoverServerIp(int port) {
     SocketHandle sock = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (sock != kInvalidSocket) {
         int opt = 1;
 #ifdef _WIN32
         setsockopt(sock, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&opt), sizeof(opt));
-        DWORD timeout = 900;
+        DWORD timeout = 1200;
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
 #else
         setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
-        timeval tv{0, 900000};
+        timeval tv{1, 200000};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
-        std::array<const char*, 4> broadcasts = {"255.255.255.255", "192.168.0.255", "192.168.1.255", "10.0.0.255"};
+        std::array<const char*, 8> broadcasts = {"255.255.255.255", "192.168.0.255", "192.168.1.255", "192.168.43.255", "10.0.0.255", "10.0.1.255", "172.16.0.255", "172.20.10.255"};
         const char* q = "MESSENGER_DISCOVER";
         for (const char* b : broadcasts) {
             sockaddr_in dst{};
@@ -293,28 +316,40 @@ std::string discoverServerIp(int port) {
             sendto(sock, q, static_cast<int>(std::strlen(q)), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
         }
 
-        char buf[128]{};
-        sockaddr_in from{};
-        socklen_t fromLen = sizeof(from);
-        int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            char buf[128]{};
+            sockaddr_in from{};
+            socklen_t fromLen = sizeof(from);
+            int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+            if (n > 0) {
+                char ip[INET_ADDRSTRLEN]{};
+                if (inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip))) {
+#ifdef _WIN32
+                    closesocket(sock);
+#else
+                    close(sock);
+#endif
+                    return std::string(ip);
+                }
+            }
+        }
 #ifdef _WIN32
         closesocket(sock);
 #else
         close(sock);
 #endif
-        if (n > 0) {
-            char ip[INET_ADDRSTRLEN]{};
-            if (inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip))) return std::string(ip);
-        }
     }
 
-    auto prefix = localPrefix();
-    if (prefix.has_value()) {
-        for (int i = 1; i <= 254; ++i) {
-            std::string ip = *prefix + std::to_string(i);
-            if (canConnectFast(ip, port, 45)) return ip;
-        }
+    auto prefixes = candidatePrefixes();
+    std::vector<std::future<std::optional<std::string>>> tasks;
+    for (const auto& pref : prefixes) {
+        tasks.push_back(std::async(std::launch::async, [pref, port] { return scanPrefix(pref, port, 40); }));
     }
+    for (auto& task : tasks) {
+        auto ip = task.get();
+        if (ip.has_value()) return *ip;
+    }
+
     return "127.0.0.1";
 }
 
