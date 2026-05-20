@@ -13,7 +13,13 @@
 #include <string_view>
 #include <thread>
 #include <vector>
-#include <set>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#else
+#include <fcntl.h>
+#include <netdb.h>
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -23,7 +29,6 @@ using SocketHandle = SOCKET;
 constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
 #else
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -32,11 +37,6 @@ constexpr SocketHandle kInvalidSocket = -1;
 #endif
 
 namespace {
-
-struct ServerInfo {
-    std::string ip;
-    int port;
-};
 
 struct ChatItem {
     std::string title;
@@ -82,222 +82,6 @@ public:
 private:
     std::string filename_;
 };
-
-// Network utilities for server discovery
-#ifdef _WIN32
-    void closeSocket(SocketHandle s) { closesocket(s); }
-#else
-    void closeSocket(SocketHandle s) { close(s); }
-#endif
-
-bool initSockets() {
-#ifdef _WIN32
-    WSADATA data{};
-    return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-#else
-    return true;
-#endif
-}
-
-void cleanupSockets() {
-#ifdef _WIN32
-    WSACleanup();
-#endif
-}
-
-std::optional<ServerInfo> discoverServerViaBroadcast(int timeoutSeconds = 2) {
-    SocketHandle sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock == kInvalidSocket) return std::nullopt;
-    
-    int broadcast = 1;
-    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (char*)&broadcast, sizeof(broadcast)) < 0) {
-        closeSocket(sock);
-        return std::nullopt;
-    }
-    
-    // Set timeout
-#ifdef _WIN32
-    DWORD timeout = timeoutSeconds * 1000;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
-#else
-    struct timeval tv;
-    tv.tv_sec = timeoutSeconds;
-    tv.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
-    
-    sockaddr_in broadcastAddr{};
-    broadcastAddr.sin_family = AF_INET;
-    broadcastAddr.sin_port = htons(5001);
-    broadcastAddr.sin_addr.s_addr = INADDR_BROADCAST;
-    
-    const char* discoverMsg = "DISCOVER_MESSENGER";
-    sendto(sock, discoverMsg, strlen(discoverMsg), 0, 
-           reinterpret_cast<sockaddr*>(&broadcastAddr), sizeof(broadcastAddr));
-    
-    char buffer[256];
-    sockaddr_in fromAddr{};
-#ifdef _WIN32
-    int fromLen = sizeof(fromAddr);
-#else
-    socklen_t fromLen = sizeof(fromAddr);
-#endif
-    
-    int bytes = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
-                         reinterpret_cast<sockaddr*>(&fromAddr), &fromLen);
-    
-    closeSocket(sock);
-    
-    if (bytes > 0) {
-        buffer[bytes] = '\0';
-        std::string response(buffer);
-        
-        if (response.rfind("MESSENGER_SERVER ", 0) == 0) {
-            std::string addrStr = response.substr(17);
-            size_t colonPos = addrStr.find(':');
-            if (colonPos != std::string::npos) {
-                ServerInfo info;
-                info.ip = addrStr.substr(0, colonPos);
-                info.port = std::stoi(addrStr.substr(colonPos + 1));
-                return info;
-            }
-        }
-    }
-    
-    return std::nullopt;
-}
-
-bool testConnection(const std::string& ip, int port, int timeoutMs = 300) {
-    SocketHandle sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == kInvalidSocket) return false;
-    
-    // Set non-blocking mode
-#ifdef _WIN32
-    u_long mode = 1;
-    ioctlsocket(sock, FIONBIO, &mode);
-#else
-    int flags = fcntl(sock, F_GETFL, 0);
-    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-#endif
-    
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    inet_pton(AF_INET, ip.c_str(), &addr.sin_addr);
-    
-    connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    
-    // Wait for connection
-    fd_set fdset;
-    FD_ZERO(&fdset);
-    FD_SET(sock, &fdset);
-    timeval tv{};
-    tv.tv_sec = timeoutMs / 1000;
-    tv.tv_usec = (timeoutMs % 1000) * 1000;
-    
-    int result = select(sock + 1, nullptr, &fdset, nullptr, &tv);
-    
-    closeSocket(sock);
-    return result > 0;
-}
-
-std::vector<ServerInfo> scanLocalNetwork(int port = 5000) {
-    std::vector<ServerInfo> servers;
-    std::set<std::string> foundIPs;
-    
-    // Common local network patterns
-    std::vector<std::string> subnets;
-    
-    // Add localhost
-    subnets.push_back("127.0.0.");
-    
-    // Get local IP addresses
-#ifdef _WIN32
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) == 0) {
-        struct hostent* he = gethostbyname(hostname);
-        if (he) {
-            for (int i = 0; he->h_addr_list[i] != nullptr; ++i) {
-                struct in_addr addr;
-                memcpy(&addr, he->h_addr_list[i], sizeof(addr));
-                std::string ip = inet_ntoa(addr);
-                if (ip.find("192.168.") == 0) {
-                    subnets.push_back("192.168." + ip.substr(8, ip.find('.', 8) - 8) + ".");
-                } else if (ip.find("10.") == 0) {
-                    subnets.push_back("10." + ip.substr(2, ip.find('.', 2) - 2) + ".");
-                } else if (ip.find("172.") == 0) {
-                    subnets.push_back("172." + ip.substr(4, ip.find('.', 4) - 4) + ".");
-                }
-            }
-        }
-    }
-#else
-    // Linux: could use getifaddrs, but for simplicity use common subnets
-    subnets.push_back("192.168.1.");
-    subnets.push_back("192.168.0.");
-    subnets.push_back("10.0.0.");
-    subnets.push_back("172.16.");
-#endif
-    
-    // Add common subnets if none found
-    if (subnets.size() <= 1) {
-        subnets.push_back("192.168.1.");
-        subnets.push_back("192.168.0.");
-        subnets.push_back("10.0.0.");
-    }
-    
-    // Remove duplicates
-    std::sort(subnets.begin(), subnets.end());
-    subnets.erase(std::unique(subnets.begin(), subnets.end()), subnets.end());
-    
-    std::cout << "[DISCOVERY] Scanning local network for server..." << std::endl;
-    
-    for (const auto& subnet : subnets) {
-        // Scan only first 25 IPs to be fast, or full range for small subnets
-        int maxIP = (subnet.find("172.") == 0) ? 32 : 25;
-        
-        for (int i = 1; i <= maxIP; ++i) {
-            std::string ip = subnet + std::to_string(i);
-            if (foundIPs.find(ip) != foundIPs.end()) continue;
-            
-            if (testConnection(ip, port)) {
-                servers.push_back({ip, port});
-                foundIPs.insert(ip);
-                std::cout << "[DISCOVERY] Found potential server at " << ip << ":" << port << std::endl;
-            }
-        }
-    }
-    
-    return servers;
-}
-
-ServerInfo findServer() {
-    std::cout << "[DISCOVERY] Searching for messenger server..." << std::endl;
-    
-    // First try UDP broadcast (fastest)
-    auto server = discoverServerViaBroadcast(2);
-    if (server.has_value()) {
-        std::cout << "[DISCOVERY] Server found via broadcast at " << server->ip << ":" << server->port << std::endl;
-        return *server;
-    }
-    
-    // Then try localhost
-    if (testConnection("127.0.0.1", 5000)) {
-        std::cout << "[DISCOVERY] Server found on localhost" << std::endl;
-        return {"127.0.0.1", 5000};
-    }
-    
-    // Finally scan the local network
-    auto servers = scanLocalNetwork(5000);
-    if (!servers.empty()) {
-        std::cout << "[DISCOVERY] Using first discovered server at " << servers[0].ip << ":" << servers[0].port << std::endl;
-        return servers[0];
-    }
-    
-    // No server found, use default
-    std::cout << "[DISCOVERY] No server found, will try localhost (waiting for server to start)..." << std::endl;
-    return {"127.0.0.1", 5000};
-}
 
 class TcpClient {
 public:
@@ -420,6 +204,93 @@ unsigned int fontSize(unsigned int base, float s) {
     return static_cast<unsigned int>(clampf(scaled, 11.f, 42.f));
 }
 
+
+std::optional<std::string> localPrefix() {
+    char host[256]{};
+    if (gethostname(host, sizeof(host)) != 0) return std::nullopt;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* result = nullptr;
+    if (getaddrinfo(host, nullptr, &hints, &result) != 0) return std::nullopt;
+
+    std::optional<std::string> prefix;
+    for (addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
+        auto* in = reinterpret_cast<sockaddr_in*>(rp->ai_addr);
+        char ip[INET_ADDRSTRLEN]{};
+        if (!inet_ntop(AF_INET, &in->sin_addr, ip, sizeof(ip))) continue;
+        std::string ipStr = ip;
+        if (ipStr.rfind("127.", 0) == 0) continue;
+        auto pos = ipStr.rfind('.');
+        if (pos != std::string::npos) {
+            prefix = ipStr.substr(0, pos + 1);
+            break;
+        }
+    }
+    freeaddrinfo(result);
+    return prefix;
+}
+
+bool tryConnectTimeout(const std::string& ip, int port, int timeoutMs) {
+    SocketHandle s = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (s == kInvalidSocket) return false;
+
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(s, FIONBIO, &mode);
+#else
+    int fl = fcntl(s, F_GETFL, 0);
+    fcntl(s, F_SETFL, fl | O_NONBLOCK);
+#endif
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return false;
+    }
+
+    int ret = ::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+#ifdef _WIN32
+    if (ret == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) { closesocket(s); return false; }
+#else
+    if (ret < 0 && errno != EINPROGRESS) { close(s); return false; }
+#endif
+
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(s, &wfds);
+    timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+    ret = select(static_cast<int>(s) + 1, nullptr, &wfds, nullptr, &tv);
+    bool ok = false;
+    if (ret > 0 && FD_ISSET(s, &wfds)) {
+        int err = 0; socklen_t len = sizeof(err);
+        getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len);
+        ok = (err == 0);
+    }
+#ifdef _WIN32
+    closesocket(s);
+#else
+    close(s);
+#endif
+    return ok;
+}
+
+std::string discoverServerIp(int port) {
+    auto prefix = localPrefix();
+    if (!prefix.has_value()) return "127.0.0.1";
+    for (int i = 1; i <= 254; ++i) {
+        std::string ip = *prefix + std::to_string(i);
+        if (tryConnectTimeout(ip, port, 55)) return ip;
+    }
+    return "127.0.0.1";
+}
+
 sf::Color avatarColor(std::size_t i) {
     return sf::Color(70 + static_cast<int>((i * 23) % 110), 95 + static_cast<int>((i * 37) % 100), 120 + static_cast<int>((i * 17) % 90));
 }
@@ -427,41 +298,10 @@ sf::Color avatarColor(std::size_t i) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string serverIp;
-    int serverPort = 5000;
-    std::string username = "sfml_user";
-    
-    // Parse command line arguments
-    if (argc > 1) {
-        // If IP is provided as argument, use it directly
-        serverIp = argv[1];
-        if (argc > 2) serverPort = std::stoi(argv[2]);
-        if (argc > 3) username = argv[3];
-        std::cout << "[CLIENT] Using manual server: " << serverIp << ":" << serverPort << std::endl;
-    } else {
-        // Auto-discover server
-        ServerInfo found = findServer();
-        serverIp = found.ip;
-        serverPort = found.port;
-        
-        // Try to connect with retries
-        int attempts = 0;
-        bool connected = false;
-        while (!connected && attempts < 5) {
-            TcpClient testClient;
-            if (testClient.connectTo(serverIp, serverPort, "test")) {
-                connected = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            attempts++;
-            std::cout << "[CLIENT] Retry " << attempts << "/5..." << std::endl;
-        }
-        
-        if (!connected) {
-            std::cout << "[CLIENT] Could not connect to discovered server, trying localhost..." << std::endl;
-            serverIp = "127.0.0.1";
-        }
+    std::string serverIp = argc > 1 ? argv[1] : "";
+    int serverPort = argc > 2 ? std::stoi(argv[2]) : 5000;
+    if (serverIp.empty()) {
+        serverIp = discoverServerIp(serverPort);
     }
 
     sf::RenderWindow window(sf::VideoMode({1366, 768}), "Messenger SFML", sf::Style::Default);
@@ -469,19 +309,12 @@ int main(int argc, char** argv) {
 
     sf::Font font;
     const std::vector<std::string> fontCandidates = {
-        "C:/Windows/Fonts/arial.ttf", 
-        "C:/Windows/Fonts/segoeui.ttf", 
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/System/Library/Fonts/Helvetica.ttc"
-    };
+        "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
     bool fontLoaded = false;
     for (const auto& path : fontCandidates) {
         if (font.openFromFile(path)) { fontLoaded = true; break; }
     }
-    if (!fontLoaded) {
-        std::cerr << "FATAL: Could not load any font!" << std::endl;
-        return 1;
-    }
+    if (!fontLoaded) return 1;
 
     ChatStorage storage("chat_history.txt");
     std::vector<ChatItem> chats = storage.load();
@@ -493,25 +326,15 @@ int main(int argc, char** argv) {
     const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
 
     TcpClient client;
-    bool connected = client.connectTo(serverIp, serverPort, username);
-    
-    // Update username in profile if connected
-    if (connected) {
-        username = "user_" + std::to_string(static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 10000));
-    }
+    bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
 
     std::vector<std::string> serverLog;
     auto addLog = [&](const std::string& line) {
         serverLog.push_back(line);
         if (serverLog.size() > 10) serverLog.erase(serverLog.begin());
     };
-    
-    if (connected) {
-        addLog("[CLIENT] Connected to " + serverIp + ":" + std::to_string(serverPort));
-    } else {
-        addLog("[CLIENT] Connection failed: " + client.lastError());
-        addLog("[CLIENT] Make sure server is running (python server.py)");
-    }
+    addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
+    addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
 
     while (window.isOpen()) {
         const auto size = window.getSize();
@@ -593,24 +416,19 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Process incoming messages
         for (const auto& message : client.consumeMessages()) {
             addLog(message);
             if (selectedChat < chats.size()) {
                 chats[selectedChat].messages.push_back(message);
-            } else if (!chats.empty()) {
-                chats[0].messages.push_back(message);
             }
         }
 
         window.clear(sf::Color(3, 22, 46));
 
-        // Left sidebar with avatars
         sf::RectangleShape avatarsBar({leftW, static_cast<float>(size.y)});
         avatarsBar.setFillColor(sf::Color(18, 33, 49));
         window.draw(avatarsBar);
 
-        // Settings button
         sf::RectangleShape settingsButton({leftW - 16.f * uiScale, settingsBtnH});
         settingsButton.setPosition({8.f * uiScale, 12.f * uiScale});
         settingsButton.setFillColor(sf::Color(27, 48, 69));
@@ -623,7 +441,6 @@ int main(int argc, char** argv) {
             window.draw(line);
         }
 
-        // Chat avatars
         const float radius = clampf(22.f * uiScale, 16.f, 34.f);
         const float startY = topPad + 28.f * uiScale;
         const float stepY = 58.f * uiScale;
@@ -634,14 +451,12 @@ int main(int argc, char** argv) {
             window.draw(avatar);
         }
 
-        // Main chat area
         const float chatX = leftW;
         sf::RectangleShape workspace({static_cast<float>(size.x) - chatX, static_cast<float>(size.y)});
         workspace.setPosition({chatX, 0.f});
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
 
-        // Chat messages
         float y = 28.f * uiScale;
         if (selectedChat < chats.size() && !chats[selectedChat].messages.empty()) {
             const auto& msgs = chats[selectedChat].messages;
@@ -656,7 +471,6 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Server log area
         float logY = static_cast<float>(size.y) - (serverLog.size() * (18.f * uiScale)) - 12.f * uiScale;
         for (const auto& line : serverLog) {
             sf::Text row(font, line, fontSize(12, uiScale));
@@ -666,7 +480,7 @@ int main(int argc, char** argv) {
             logY += 18.f * uiScale;
         }
 
-        // Settings panel animation
+
         const float targetAnim = settingsOpen ? 1.f : 0.f;
         settingsAnim += (targetAnim - settingsAnim) * 0.18f;
 
@@ -690,13 +504,13 @@ int main(int argc, char** argv) {
             profileAvatar.setPosition({avatarCx - avatarRadius, avatarCy - avatarRadius});
             window.draw(profileAvatar);
 
-            sf::Text profileName(font, username, fontSize(20, uiScale));
+            sf::Text profileName(font, "Username", fontSize(20, uiScale));
             profileName.setFillColor(sf::Color(220, 235, 247));
             const auto profileBounds = profileName.getLocalBounds();
             profileName.setPosition({avatarCx - profileBounds.size.x * 0.5f, avatarCy + avatarRadius + 18.f * uiScale});
             window.draw(profileName);
 
-            sf::Text profileHandle(font, "@" + username, fontSize(15, uiScale));
+            sf::Text profileHandle(font, "@username", fontSize(15, uiScale));
             profileHandle.setFillColor(sf::Color(148, 178, 205));
             const auto handleBounds = profileHandle.getLocalBounds();
             profileHandle.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
@@ -722,7 +536,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Profile panel animation
+
         const float targetProfile = profileOpen ? 1.f : 0.f;
         profileAnim += (targetProfile - profileAnim) * 0.16f;
 
@@ -761,7 +575,7 @@ int main(int argc, char** argv) {
             pAvatar.setPosition({pAvatarCX - pAvatarR, pAvatarCY - pAvatarR});
             window.draw(pAvatar);
 
-            sf::Text pName(font, username, fontSize(22, uiScale));
+            sf::Text pName(font, "Username", fontSize(22, uiScale));
             pName.setFillColor(sf::Color(232, 241, 252));
             auto b1 = pName.getLocalBounds();
             pName.setPosition({pAvatarCX - b1.size.x * 0.5f, pAvatarCY + pAvatarR + 12.f * uiScale});
@@ -775,20 +589,15 @@ int main(int argc, char** argv) {
 
             const float infoX = cardX + 26.f * uiScale;
             float infoY = bodyY + 22.f * uiScale;
-            sf::Text t1(font, "@" + username, fontSize(18, uiScale)); 
-            t1.setFillColor(sf::Color(104, 176, 255)); 
-            t1.setPosition({infoX, infoY}); 
-            window.draw(t1);
+            sf::Text t1(font, "@username", fontSize(18, uiScale)); t1.setFillColor(sf::Color(104, 176, 255)); t1.setPosition({infoX, infoY}); window.draw(t1);
             infoY += 42.f * uiScale;
-            sf::Text t2(font, "About me", fontSize(15, uiScale)); 
-            t2.setFillColor(sf::Color(143, 172, 197)); 
-            t2.setPosition({infoX, infoY}); 
-            window.draw(t2);
+            sf::Text t2(font, "About me", fontSize(15, uiScale)); t2.setFillColor(sf::Color(143, 172, 197)); t2.setPosition({infoX, infoY}); window.draw(t2);
             infoY += 25.f * uiScale;
-            sf::Text t3(font, "Messenger user", fontSize(16, uiScale)); 
-            t3.setFillColor(sf::Color(210, 225, 239)); 
-            t3.setPosition({infoX, infoY}); 
-            window.draw(t3);
+            sf::Text t3(font, "I like coding and music", fontSize(16, uiScale)); t3.setFillColor(sf::Color(210, 225, 239)); t3.setPosition({infoX, infoY}); window.draw(t3);
+            infoY += 48.f * uiScale;
+            sf::Text t4(font, "Birthday", fontSize(15, uiScale)); t4.setFillColor(sf::Color(143, 172, 197)); t4.setPosition({infoX, infoY}); window.draw(t4);
+            infoY += 25.f * uiScale;
+            sf::Text t5(font, "10 Jan", fontSize(16, uiScale)); t5.setFillColor(sf::Color(210, 225, 239)); t5.setPosition({infoX, infoY}); window.draw(t5);
         }
 
         connected = client.isConnected();
