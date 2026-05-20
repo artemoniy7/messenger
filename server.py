@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Simple LAN messenger server with broadcast discovery.
-
-Protocol (UTF-8, newline-delimited):
-- client sends first line: username
-- server replies with: OK <your_name>
-- then each incoming line is broadcast as: [HH:MM:SS] <name>: <message>
-
-Admin commands from client:
-- /name NEW_NAME  -> rename client
-- /quit           -> disconnect
-
-Discovery:
-- Server listens on UDP port 5001 for broadcast "MESSENGER_DISCOVER"
-- Responds with "MESSENGER_SERVER <ip>:<port>"
-"""
+"""Simple LAN messenger server with broadcast discovery."""
 
 from __future__ import annotations
 
@@ -48,19 +34,36 @@ class ChatServer:
         self._running.set()
         
         self._discovery_sock: Optional[socket.socket] = None
+        self._server_ip = self._get_local_ip()
+
+    def _get_local_ip(self) -> str:
+        """Get the actual local IP address of the server."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            print(f"[INFO] Server IP detected: {ip}")
+            return ip
+        except Exception:
+            return "127.0.0.1"
 
     def start_discovery(self) -> None:
         """Starts UDP broadcast listener for server discovery."""
         try:
             self._discovery_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            # Android requires this for broadcast
             self._discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            # Bind to all interfaces on discovery port
+            
+            # Bind to all interfaces
             self._discovery_sock.bind(('', DISCOVERY_PORT))
             
             thread = threading.Thread(target=self._discovery_listener, daemon=True)
             thread.start()
             print(f"[INFO] Discovery listener started on UDP port {DISCOVERY_PORT}")
+            print(f"[INFO] Server will respond with IP: {self._server_ip}")
         except Exception as e:
             print(f"[WARN] Could not start discovery listener: {e}")
 
@@ -72,49 +75,28 @@ class ChatServer:
                 data, addr = self._discovery_sock.recvfrom(1024)
                 
                 if data == DISCOVERY_QUERY:
-                    # Get server's local IP that the client can reach
-                    server_ip = self._get_local_ip_for_client(addr[0])
-                    response = f"MESSENGER_SERVER {server_ip}:{self.port}".encode('utf-8')
+                    response = f"MESSENGER_SERVER {self._server_ip}:{self.port}".encode('utf-8')
                     self._discovery_sock.sendto(response, addr)
-                    print(f"[INFO] Discovery response sent to {addr[0]}:{addr[1]} (server at {server_ip}:{self.port})")
+                    print(f"[INFO] Discovery response sent to {addr[0]}:{addr[1]} -> {self._server_ip}:{self.port}")
             except socket.timeout:
                 continue
             except Exception as e:
                 if self._running.is_set():
                     print(f"[WARN] Discovery error: {e}")
 
-    def _get_local_ip_for_client(self, client_ip: str) -> str:
-        """Returns the best local IP address for the client to connect to."""
-        try:
-            # Create a temporary connection to determine the interface
-            temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            temp_sock.connect((client_ip, 1))
-            local_ip = temp_sock.getsockname()[0]
-            temp_sock.close()
-            return local_ip
-        except Exception:
-            # Fallback: try to get non-localhost IP
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                s.close()
-                return local_ip
-            except Exception:
-                return self.host if self.host != '0.0.0.0' else '127.0.0.1'
-
     def start(self) -> None:
         self.server_sock.bind((self.host, self.port))
         self.server_sock.listen()
         self.start_discovery()
-        print(f"[INFO] Server started on {self.host}:{self.port}")
-        print(f"[INFO] Clients can discover server automatically on local network")
+        print(f"[INFO] Server started on {self._server_ip}:{self.port}")
+        print(f"[INFO] Connect with: ./messenger {self._server_ip} {self.port}")
 
         try:
             while self._running.is_set():
                 self.server_sock.settimeout(1.0)
                 try:
                     client_sock, addr = self.server_sock.accept()
+                    print(f"[INFO] Client connected from {addr[0]}:{addr[1]}")
                     thread = threading.Thread(
                         target=self._handle_client,
                         args=(client_sock, addr),
@@ -134,7 +116,6 @@ class ChatServer:
 
         self._running.clear()
 
-        # Close discovery socket
         if self._discovery_sock:
             try:
                 self._discovery_sock.close()
