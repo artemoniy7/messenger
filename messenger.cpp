@@ -385,7 +385,12 @@ int main(int argc, char** argv) {
     float settingsAnim = 0.f;
     bool profileOpen = false;
     float profileAnim = 0.f;
+    bool advancedSettingsOpen = false;
+    float advancedSettingsAnim = 0.f;
     const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
+    const std::vector<std::string> advancedSettingsItems = {
+        "My account", "Notifications and sounds", "Privacy", "Chat settings",
+        "Chat folders", "Advanced", "Language", "Default scale", "Telegram Premium", "Saved messages"};
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -424,6 +429,18 @@ int main(int argc, char** argv) {
                         continue;
                     }
 
+                    if (advancedSettingsAnim > 0.01f) {
+                        const float cardW = clampf(500.f * uiScale, 360.f, 600.f);
+                        const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) {
+                            advancedSettingsOpen = false;
+                            continue;
+                        }
+                    }
+
                     if (profileAnim > 0.01f) {
                         const float cardW = clampf(420.f * uiScale, 320.f, 560.f);
                         const float cardH = clampf(640.f * uiScale, 440.f, static_cast<float>(size.y) - 40.f * uiScale);
@@ -457,6 +474,11 @@ int main(int argc, char** argv) {
                             if (hit && i == 0) {
                                 settingsOpen = false;
                                 profileOpen = true;
+                                break;
+                            }
+                            if (hit && i == settingsItems.size() - 1) {
+                                settingsOpen = false;
+                                advancedSettingsOpen = true;
                                 break;
                             }
                         }
@@ -595,6 +617,73 @@ int main(int argc, char** argv) {
                 itemText.setFillColor(hovered ? sf::Color(245, 250, 255) : sf::Color(186, 209, 230));
                 itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(itemText);
+            }
+        }
+
+
+        const float targetAdvancedSettings = advancedSettingsOpen ? 1.f : 0.f;
+        advancedSettingsAnim += (targetAdvancedSettings - advancedSettingsAnim) * 0.16f;
+
+        if (advancedSettingsAnim > 0.01f) {
+            sf::RectangleShape dim3({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dim3.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(130.f * advancedSettingsAnim)));
+            window.draw(dim3);
+
+            const float cardW = clampf(500.f * uiScale, 360.f, 600.f);
+            const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+            const float offsetY = (1.f - advancedSettingsAnim) * 20.f * uiScale;
+
+            sf::RectangleShape card({cardW, cardH});
+            card.setPosition({cardX, cardY + offsetY});
+            card.setFillColor(sf::Color(14, 27, 42));
+            window.draw(card);
+
+            sf::Text title(font, "Settings", fontSize(24, uiScale));
+            title.setFillColor(sf::Color(228, 238, 248));
+            title.setPosition({cardX + 24.f * uiScale, cardY + 16.f * uiScale + offsetY});
+            window.draw(title);
+
+            const float topBlockY = cardY + 64.f * uiScale + offsetY;
+            sf::RectangleShape topBlock({cardW, 124.f * uiScale});
+            topBlock.setPosition({cardX, topBlockY});
+            topBlock.setFillColor(sf::Color(19, 34, 51));
+            window.draw(topBlock);
+
+            sf::CircleShape avatar(clampf(34.f * uiScale, 24.f, 42.f));
+            avatar.setFillColor(sf::Color(192, 44, 56));
+            avatar.setPosition({cardX + 20.f * uiScale, topBlockY + 18.f * uiScale});
+            window.draw(avatar);
+
+            sf::Text name(font, "Username", fontSize(20, uiScale));
+            name.setFillColor(sf::Color(231, 240, 249));
+            name.setPosition({cardX + 102.f * uiScale, topBlockY + 26.f * uiScale});
+            window.draw(name);
+
+            sf::Text handle(font, "@username", fontSize(15, uiScale));
+            handle.setFillColor(sf::Color(134, 171, 202));
+            handle.setPosition({cardX + 102.f * uiScale, topBlockY + 58.f * uiScale});
+            window.draw(handle);
+
+            float itemY = topBlockY + 140.f * uiScale;
+            const float itemH = 44.f * uiScale;
+            for (std::size_t i = 0; i < advancedSettingsItems.size(); ++i) {
+                const sf::FloatRect itemRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
+                const bool hovered = itemRect.contains(mousePos);
+
+                sf::RectangleShape bg(itemRect.size);
+                bg.setPosition(itemRect.position);
+                bg.setFillColor(hovered ? sf::Color(255, 255, 255, 30) : sf::Color(255, 255, 255, 10));
+                window.draw(bg);
+
+                sf::Text row(font, advancedSettingsItems[i], fontSize(16, uiScale));
+                row.setFillColor(sf::Color(214, 230, 242));
+                row.setPosition({itemRect.position.x + 14.f * uiScale, itemRect.position.y + 9.f * uiScale});
+                window.draw(row);
+
+                itemY += itemH + 8.f * uiScale;
+                if (itemY > cardY + cardH - 60.f * uiScale + offsetY) break;
             }
         }
 
