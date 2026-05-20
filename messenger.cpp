@@ -205,91 +205,51 @@ unsigned int fontSize(unsigned int base, float s) {
 }
 
 
-std::optional<std::string> localPrefix() {
-    char host[256]{};
-    if (gethostname(host, sizeof(host)) != 0) return std::nullopt;
-    addrinfo hints{};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    addrinfo* result = nullptr;
-    if (getaddrinfo(host, nullptr, &hints, &result) != 0) return std::nullopt;
-
-    std::optional<std::string> prefix;
-    for (addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
-        auto* in = reinterpret_cast<sockaddr_in*>(rp->ai_addr);
-        char ip[INET_ADDRSTRLEN]{};
-        if (!inet_ntop(AF_INET, &in->sin_addr, ip, sizeof(ip))) continue;
-        std::string ipStr = ip;
-        if (ipStr.rfind("127.", 0) == 0) continue;
-        auto pos = ipStr.rfind('.');
-        if (pos != std::string::npos) {
-            prefix = ipStr.substr(0, pos + 1);
-            break;
-        }
-    }
-    freeaddrinfo(result);
-    return prefix;
-}
-
-bool tryConnectTimeout(const std::string& ip, int port, int timeoutMs) {
-    SocketHandle s = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (s == kInvalidSocket) return false;
-
-#ifdef _WIN32
-    u_long mode = 1;
-    ioctlsocket(s, FIONBIO, &mode);
-#else
-    int fl = fcntl(s, F_GETFL, 0);
-    fcntl(s, F_SETFL, fl | O_NONBLOCK);
-#endif
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    if (::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0) {
-#ifdef _WIN32
-        closesocket(s);
-#else
-        close(s);
-#endif
-        return false;
-    }
-
-    int ret = ::connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-#ifdef _WIN32
-    if (ret == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) { closesocket(s); return false; }
-#else
-    if (ret < 0 && errno != EINPROGRESS) { close(s); return false; }
-#endif
-
-    fd_set wfds;
-    FD_ZERO(&wfds);
-    FD_SET(s, &wfds);
-    timeval tv{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
-    ret = select(static_cast<int>(s) + 1, nullptr, &wfds, nullptr, &tv);
-    bool ok = false;
-    if (ret > 0 && FD_ISSET(s, &wfds)) {
-        int err = 0; socklen_t len = sizeof(err);
-        getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len);
-        ok = (err == 0);
-    }
-#ifdef _WIN32
-    closesocket(s);
-#else
-    close(s);
-#endif
-    return ok;
-}
-
 std::string discoverServerIp(int port) {
-    auto prefix = localPrefix();
-    if (!prefix.has_value()) return "127.0.0.1";
-    for (int i = 1; i <= 254; ++i) {
-        std::string ip = *prefix + std::to_string(i);
-        if (tryConnectTimeout(ip, port, 55)) return ip;
-    }
-    return "127.0.0.1";
+    (void)port;
+    SocketHandle sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == kInvalidSocket) return "127.0.0.1";
+
+    int opt = 1;
+#ifdef _WIN32
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&opt), sizeof(opt));
+    DWORD timeout = 700;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+    timeval tv{0, 700000};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
+    sockaddr_in bcast{};
+    bcast.sin_family = AF_INET;
+    bcast.sin_port = htons(5001);
+    bcast.sin_addr.s_addr = INADDR_BROADCAST;
+
+    const char* q = "MESSENGER_DISCOVER";
+    sendto(sock, q, static_cast<int>(std::strlen(q)), 0, reinterpret_cast<sockaddr*>(&bcast), sizeof(bcast));
+
+    char buf[128]{};
+    sockaddr_in from{};
+    socklen_t fromLen = sizeof(from);
+    int n = recvfrom(sock, buf, sizeof(buf)-1, 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+
+#ifdef _WIN32
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+
+    if (n <= 0) return "127.0.0.1";
+    buf[n] = '\0';
+    std::string resp(buf);
+    if (resp.rfind("MESSENGER_SERVER", 0) != 0) return "127.0.0.1";
+
+    char ip[INET_ADDRSTRLEN]{};
+    if (!inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip))) return "127.0.0.1";
+    return std::string(ip);
 }
+
 
 sf::Color avatarColor(std::size_t i) {
     return sf::Color(70 + static_cast<int>((i * 23) % 110), 95 + static_cast<int>((i * 37) % 100), 120 + static_cast<int>((i * 17) % 90));
