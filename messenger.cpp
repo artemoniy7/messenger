@@ -224,6 +224,8 @@ int main(int argc, char** argv) {
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
     float settingsAnim = 0.f;
+    bool profileOpen = false;
+    float profileAnim = 0.f;
     const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
 
     TcpClient client;
@@ -262,11 +264,41 @@ int main(int argc, char** argv) {
                         continue;
                     }
 
+                    if (profileAnim > 0.01f) {
+                        const float cardW = clampf(420.f * uiScale, 320.f, 560.f);
+                        const float cardH = clampf(640.f * uiScale, 440.f, static_cast<float>(size.y) - 40.f * uiScale);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) {
+                            profileOpen = false;
+                            continue;
+                        }
+                    }
+
                     if (settingsOpen) {
                         const bool insidePanel = (mx <= settingsPanelW);
                         if (!insidePanel) {
                             settingsOpen = false;
                             continue;
+                        }
+
+                        const float avatarRadius = clampf(44.f * uiScale, 30.f, 58.f);
+                        const float avatarCy = 52.f * uiScale + avatarRadius;
+                        const float itemsStartY = avatarCy + avatarRadius + 96.f * uiScale;
+                        const float itemH = 34.f * uiScale;
+                        const float itemGap = 10.f * uiScale;
+                        const float itemX = 16.f * uiScale;
+                        const float itemW = settingsPanelW - 32.f * uiScale;
+
+                        for (std::size_t i = 0; i < settingsItems.size(); ++i) {
+                            const float itemY = itemsStartY + static_cast<float>(i) * (itemH + itemGap);
+                            const bool hit = (mx >= itemX && mx <= itemX + itemW && my >= itemY && my <= itemY + itemH);
+                            if (hit && i == 0) {
+                                settingsOpen = false;
+                                profileOpen = true;
+                                break;
+                            }
                         }
                     }
 
@@ -404,6 +436,70 @@ int main(int argc, char** argv) {
                 itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(itemText);
             }
+        }
+
+
+        const float targetProfile = profileOpen ? 1.f : 0.f;
+        profileAnim += (targetProfile - profileAnim) * 0.16f;
+
+        if (profileAnim > 0.01f) {
+            sf::RectangleShape dim2({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dim2.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(120.f * profileAnim)));
+            window.draw(dim2);
+
+            const float cardW = clampf(420.f * uiScale, 320.f, 560.f);
+            const float cardH = clampf(640.f * uiScale, 440.f, static_cast<float>(size.y) - 40.f * uiScale);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+
+            sf::RectangleShape card({cardW, cardH});
+            card.setPosition({cardX, cardY + (1.f - profileAnim) * 20.f * uiScale});
+            card.setFillColor(sf::Color(24, 40, 58));
+            window.draw(card);
+
+            const float topH = cardH * 0.34f;
+            sf::RectangleShape topPart({cardW, topH});
+            topPart.setPosition({cardX, cardY + (1.f - profileAnim) * 20.f * uiScale});
+            topPart.setFillColor(sf::Color(43, 62, 86));
+            window.draw(topPart);
+
+            const float bodyY = cardY + (1.f - profileAnim) * 20.f * uiScale + topH;
+            sf::RectangleShape bodyPart({cardW, cardH - topH});
+            bodyPart.setPosition({cardX, bodyY});
+            bodyPart.setFillColor(sf::Color(28, 44, 63));
+            window.draw(bodyPart);
+
+            const float pAvatarR = clampf(46.f * uiScale, 32.f, 64.f);
+            const float pAvatarCX = cardX + cardW * 0.5f;
+            const float pAvatarCY = cardY + (1.f - profileAnim) * 20.f * uiScale + 42.f * uiScale + pAvatarR;
+            sf::CircleShape pAvatar(pAvatarR);
+            pAvatar.setFillColor(sf::Color(207, 56, 67));
+            pAvatar.setPosition({pAvatarCX - pAvatarR, pAvatarCY - pAvatarR});
+            window.draw(pAvatar);
+
+            sf::Text pName(font, "Username", fontSize(22, uiScale));
+            pName.setFillColor(sf::Color(232, 241, 252));
+            auto b1 = pName.getLocalBounds();
+            pName.setPosition({pAvatarCX - b1.size.x * 0.5f, pAvatarCY + pAvatarR + 12.f * uiScale});
+            window.draw(pName);
+
+            sf::Text pStatus(font, connected ? "online" : "offline", fontSize(16, uiScale));
+            pStatus.setFillColor(connected ? sf::Color(105, 223, 151) : sf::Color(170, 186, 206));
+            auto b2 = pStatus.getLocalBounds();
+            pStatus.setPosition({pAvatarCX - b2.size.x * 0.5f, pAvatarCY + pAvatarR + 42.f * uiScale});
+            window.draw(pStatus);
+
+            const float infoX = cardX + 26.f * uiScale;
+            float infoY = bodyY + 22.f * uiScale;
+            sf::Text t1(font, "@username", fontSize(18, uiScale)); t1.setFillColor(sf::Color(104, 176, 255)); t1.setPosition({infoX, infoY}); window.draw(t1);
+            infoY += 42.f * uiScale;
+            sf::Text t2(font, "About me", fontSize(15, uiScale)); t2.setFillColor(sf::Color(143, 172, 197)); t2.setPosition({infoX, infoY}); window.draw(t2);
+            infoY += 25.f * uiScale;
+            sf::Text t3(font, "I like coding and music", fontSize(16, uiScale)); t3.setFillColor(sf::Color(210, 225, 239)); t3.setPosition({infoX, infoY}); window.draw(t3);
+            infoY += 48.f * uiScale;
+            sf::Text t4(font, "Birthday", fontSize(15, uiScale)); t4.setFillColor(sf::Color(143, 172, 197)); t4.setPosition({infoX, infoY}); window.draw(t4);
+            infoY += 25.f * uiScale;
+            sf::Text t5(font, "10 Jan", fontSize(16, uiScale)); t5.setFillColor(sf::Color(210, 225, 239)); t5.setPosition({infoX, infoY}); window.draw(t5);
         }
 
         connected = client.isConnected();
