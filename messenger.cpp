@@ -537,17 +537,21 @@ int main(int argc, char** argv) {
                         const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
                         const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
                         const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
-                        const float itemH = 35.2f * uiScale;
                         float itemY = cardY + 64.f * uiScale + 99.2f * uiScale + 112.f * uiScale;
-                        const sf::FloatRect myAccountRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
-                        if (myAccountRect.contains({mx, my})) {
-                            draftFirstName = profileFirstName;
-                            draftLastName = profileLastName;
-                            editProfileOpen = true;
-                            editFirstActive = true;
-                            editLastActive = false;
-                            advancedSettingsOpen = false;
-                            continue;
+                        const float itemH = 35.2f * uiScale;
+                        const float itemGap = 6.4f * uiScale;
+                        for (std::size_t i = 0; i < advancedSettingsItems.size(); ++i) {
+                            const sf::FloatRect itemRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
+                            if (itemRect.contains({mx, my}) && i == 0) {
+                                draftFirstName = profileFirstName;
+                                draftLastName = profileLastName;
+                                editProfileOpen = true;
+                                editFirstActive = true;
+                                editLastActive = false;
+                                advancedSettingsOpen = false;
+                                continue;
+                            }
+                            itemY += itemH + itemGap;
                         }
                     }
 
@@ -586,6 +590,41 @@ int main(int argc, char** argv) {
                                 serverPortDraft = std::to_string(serverPort);
                                 break;
                             }
+                        }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect ipRect({cardX + 28.f * uiScale, cardY + 150.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect portRect({cardX + 28.f * uiScale, cardY + 232.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect cancelRect({cardX + cardW - 232.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+                        const sf::FloatRect okRect({cardX + cardW - 124.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+
+                        if (okRect.contains({mx, my})) {
+                            serverIp = serverIpDraft;
+                            if (!serverPortDraft.empty()) serverPort = std::stoi(serverPortDraft);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+
+                            addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
+                            addLog("[CLIENT] Reconnecting...");
+                            reconnecting = true;
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
+                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            });
+                        } else if (cancelRect.contains({mx, my})) {
+                            serverIpDraft = serverIp;
+                            serverPortDraft = std::to_string(serverPort);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+                        } else {
+                            serverIpInputActive = ipRect.contains({mx, my});
+                            serverPortInputActive = portRect.contains({mx, my});
                         }
                     }
 
