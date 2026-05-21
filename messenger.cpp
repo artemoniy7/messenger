@@ -402,6 +402,8 @@ int main(int argc, char** argv) {
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
 
     std::vector<std::string> serverLog;
+    bool reconnecting = false;
+    std::future<bool> reconnectTask;
     auto addLog = [&](const std::string& line) {
         serverLog.push_back(line);
         if (serverLog.size() > 10) serverLog.erase(serverLog.begin());
@@ -548,9 +550,12 @@ int main(int argc, char** argv) {
                             serverIpInputActive = false;
                             serverPortInputActive = false;
 
-                            connected = client.connectTo(serverIp, serverPort, "sfml_user");
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
-                            addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
+                            addLog("[CLIENT] Reconnecting...");
+                            reconnecting = true;
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
+                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
                             serverPortDraft = std::to_string(serverPort);
@@ -588,6 +593,13 @@ int main(int argc, char** argv) {
                 }
             }
         }
+
+        if (reconnecting && reconnectTask.valid() && reconnectTask.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            connected = reconnectTask.get();
+            reconnecting = false;
+            addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
+        }
+
 
         for (const auto& message : client.consumeMessages()) {
             addLog(message);
@@ -915,7 +927,7 @@ int main(int argc, char** argv) {
             sf::Text t5(font, "10 Jan", fontSize(16, uiScale)); t5.setFillColor(sf::Color(210, 225, 239)); t5.setPosition({infoX, infoY}); window.draw(t5);
         }
 
-        connected = client.isConnected();
+        if (!reconnecting) connected = client.isConnected();
         window.display();
 
         static auto lastSave = std::chrono::steady_clock::now();
