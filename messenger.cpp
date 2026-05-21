@@ -385,7 +385,16 @@ int main(int argc, char** argv) {
     float settingsAnim = 0.f;
     bool profileOpen = false;
     float profileAnim = 0.f;
-    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
+    bool advancedSettingsOpen = false;
+    float advancedSettingsAnim = 0.f;
+    bool serverSettingsOpen = false;
+    float serverSettingsAnim = 0.f;
+    bool serverIpInputActive = false;
+    std::string serverIpDraft = serverIp;
+    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Additional settings"};
+    const std::vector<std::string> advancedSettingsItems = {
+        "My account", "Notifications and sounds", "Privacy", "Chat settings",
+        "Language", "Saved messages"};
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -413,6 +422,22 @@ int main(int argc, char** argv) {
                 storage.save(chats);
                 window.close();
             }
+            if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (serverIpInputActive) {
+                    const char32_t code = textEntered->unicode;
+                    if (code == 8) {
+                        if (!serverIpDraft.empty()) serverIpDraft.pop_back();
+                    } else if (code == 13 || code == 10) {
+                        serverIpInputActive = false;
+                        serverIp = serverIpDraft;
+                    } else if (code >= 32 && code < 127) {
+                        const char ch = static_cast<char>(code);
+                        if ((ch >= '0' && ch <= '9') || ch == '.') {
+                            if (serverIpDraft.size() < 15) serverIpDraft.push_back(ch);
+                        }
+                    }
+                }
+            }
             if (const auto* pressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                 if (pressed->button == sf::Mouse::Button::Left) {
                     const float mx = static_cast<float>(pressed->position.x);
@@ -422,6 +447,31 @@ int main(int argc, char** argv) {
                     if (onSettingsButton) {
                         settingsOpen = true;
                         continue;
+                    }
+
+                    if (serverSettingsAnim > 0.01f) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) {
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            continue;
+                        }
+                    }
+
+                    if (advancedSettingsAnim > 0.01f) {
+                        const float cardW = clampf(500.f * uiScale, 360.f, 600.f);
+                        const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) {
+                            advancedSettingsOpen = false;
+                            continue;
+                        }
                     }
 
                     if (profileAnim > 0.01f) {
@@ -459,7 +509,22 @@ int main(int argc, char** argv) {
                                 profileOpen = true;
                                 break;
                             }
+                            if (hit && i == settingsItems.size() - 1) {
+                                settingsOpen = false;
+                                serverSettingsOpen = true;
+                                break;
+                            }
                         }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        serverIpInputActive = inputRect.contains({mx,my});
+                        if (!serverIpInputActive) serverIp = serverIpDraft;
                     }
 
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
@@ -595,6 +660,125 @@ int main(int argc, char** argv) {
                 itemText.setFillColor(hovered ? sf::Color(245, 250, 255) : sf::Color(186, 209, 230));
                 itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(itemText);
+            }
+        }
+
+
+        const float targetServerSettings = serverSettingsOpen ? 1.f : 0.f;
+        serverSettingsAnim += (targetServerSettings - serverSettingsAnim) * 0.16f;
+
+        if (serverSettingsAnim > 0.01f) {
+            sf::RectangleShape dimSrv({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dimSrv.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(120.f * serverSettingsAnim)));
+            window.draw(dimSrv);
+
+            const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+            const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+            const float offsetY = (1.f - serverSettingsAnim) * 20.f * uiScale;
+
+            sf::RectangleShape cardSrv({cardW, cardH});
+            cardSrv.setPosition({cardX, cardY + offsetY});
+            cardSrv.setFillColor(sf::Color(14, 27, 42));
+            window.draw(cardSrv);
+
+            sf::Text titleSrv(font, "Additional settings", fontSize(24, uiScale));
+            titleSrv.setFillColor(sf::Color(228, 238, 248));
+            titleSrv.setPosition({cardX + 28.f * uiScale, cardY + 22.f * uiScale + offsetY});
+            window.draw(titleSrv);
+
+            sf::Text sub(font, "Server IP", fontSize(16, uiScale));
+            sub.setFillColor(sf::Color(156, 185, 210));
+            sub.setPosition({cardX + 28.f * uiScale, cardY + 136.f * uiScale + offsetY});
+            window.draw(sub);
+
+            const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale + offsetY}, {cardW - 56.f * uiScale, 52.f * uiScale});
+            sf::RectangleShape inputBg(inputRect.size);
+            inputBg.setPosition(inputRect.position);
+            inputBg.setFillColor(sf::Color(20, 36, 54));
+            window.draw(inputBg);
+
+            sf::Text changeLabel(font, "Editing: server ip", fontSize(13, uiScale));
+            changeLabel.setFillColor(sf::Color(138, 169, 195));
+            changeLabel.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 6.f * uiScale});
+            window.draw(changeLabel);
+
+            sf::Text value(font, serverIpDraft.empty() ? "0.0.0.0" : serverIpDraft, fontSize(18, uiScale));
+            value.setFillColor(sf::Color(225, 238, 249));
+            value.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 24.f * uiScale});
+            window.draw(value);
+
+            sf::RectangleShape underline({inputRect.size.x, 3.f * uiScale});
+            underline.setPosition({inputRect.position.x, inputRect.position.y + inputRect.size.y - 3.f * uiScale});
+            underline.setFillColor(serverIpInputActive ? sf::Color(86, 177, 255) : sf::Color(109, 125, 139));
+            window.draw(underline);
+        }
+
+
+        const float targetAdvancedSettings = advancedSettingsOpen ? 1.f : 0.f;
+        advancedSettingsAnim += (targetAdvancedSettings - advancedSettingsAnim) * 0.16f;
+
+        if (advancedSettingsAnim > 0.01f) {
+            sf::RectangleShape dim3({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dim3.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(130.f * advancedSettingsAnim)));
+            window.draw(dim3);
+
+            const float cardW = clampf(500.f * uiScale, 360.f, 600.f);
+            const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+            const float offsetY = (1.f - advancedSettingsAnim) * 20.f * uiScale;
+
+            sf::RectangleShape card({cardW, cardH});
+            card.setPosition({cardX, cardY + offsetY});
+            card.setFillColor(sf::Color(14, 27, 42));
+            window.draw(card);
+
+            sf::Text title(font, "Settings", fontSize(24, uiScale));
+            title.setFillColor(sf::Color(228, 238, 248));
+            title.setPosition({cardX + 24.f * uiScale, cardY + 16.f * uiScale + offsetY});
+            window.draw(title);
+
+            const float topBlockY = cardY + 64.f * uiScale + offsetY;
+            sf::RectangleShape topBlock({cardW, 99.2f * uiScale});
+            topBlock.setPosition({cardX, topBlockY});
+            topBlock.setFillColor(sf::Color(19, 34, 51));
+            window.draw(topBlock);
+
+            sf::CircleShape avatar(clampf(34.f * uiScale, 24.f, 42.f));
+            avatar.setFillColor(sf::Color(192, 44, 56));
+            avatar.setPosition({cardX + 20.f * uiScale, topBlockY + 18.f * uiScale});
+            window.draw(avatar);
+
+            sf::Text name(font, "Username", fontSize(20, uiScale));
+            name.setFillColor(sf::Color(231, 240, 249));
+            name.setPosition({cardX + 102.f * uiScale, topBlockY + 26.f * uiScale});
+            window.draw(name);
+
+            sf::Text handle(font, "@username", fontSize(15, uiScale));
+            handle.setFillColor(sf::Color(134, 171, 202));
+            handle.setPosition({cardX + 102.f * uiScale, topBlockY + 58.f * uiScale});
+            window.draw(handle);
+
+            float itemY = topBlockY + 112.f * uiScale;
+            const float itemH = 35.2f * uiScale;
+            for (std::size_t i = 0; i < advancedSettingsItems.size(); ++i) {
+                const sf::FloatRect itemRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
+                const bool hovered = itemRect.contains(mousePos);
+
+                sf::RectangleShape bg(itemRect.size);
+                bg.setPosition(itemRect.position);
+                bg.setFillColor(hovered ? sf::Color(255, 255, 255, 30) : sf::Color(255, 255, 255, 10));
+                window.draw(bg);
+
+                sf::Text row(font, advancedSettingsItems[i], fontSize(16, uiScale));
+                row.setFillColor(sf::Color(214, 230, 242));
+                row.setPosition({itemRect.position.x + 14.f * uiScale, itemRect.position.y + 7.f * uiScale});
+                window.draw(row);
+
+                itemY += itemH + 6.4f * uiScale;
+                if (itemY > cardY + cardH - 60.f * uiScale + offsetY) break;
             }
         }
 
