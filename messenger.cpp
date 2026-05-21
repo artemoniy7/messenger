@@ -385,6 +385,17 @@ int main(int argc, char** argv) {
     float settingsAnim = 0.f;
     bool profileOpen = false;
     float profileAnim = 0.f;
+    std::string profileFirstName = "Username";
+    std::string profileLastName = "User";
+    std::string profilePhone = "+7 910 000 0000";
+    std::string profileHandle = "@username";
+    std::string profileBio = "I like coding and music";
+    bool editProfileOpen = false;
+    float editProfileAnim = 0.f;
+    bool editFirstActive = false;
+    bool editLastActive = false;
+    std::string draftFirstName;
+    std::string draftLastName;
     bool advancedSettingsOpen = false;
     float advancedSettingsAnim = 0.f;
     bool serverSettingsOpen = false;
@@ -427,6 +438,14 @@ int main(int argc, char** argv) {
                 window.close();
             }
             if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (editFirstActive || editLastActive) {
+                    const char32_t code = textEntered->unicode;
+                    std::string* target = editFirstActive ? &draftFirstName : &draftLastName;
+                    if (code == 8) { if (!target->empty()) target->pop_back(); }
+                    else if (code == 13 || code == 10) { editFirstActive = false; editLastActive = false; }
+                    else if (code >= 32 && code < 127) { if (target->size() < 20) target->push_back(static_cast<char>(code)); }
+                }
+
                 if (serverIpInputActive || serverPortInputActive) {
                     const char32_t code = textEntered->unicode;
                     if (code == 8) {
@@ -455,6 +474,24 @@ int main(int argc, char** argv) {
                     if (onSettingsButton) {
                         settingsOpen = true;
                         continue;
+                    }
+
+
+                    if (editProfileAnim > 0.01f) {
+                        const float cardW = clampf(560.f * uiScale, 380.f, 700.f);
+                        const float cardH = clampf(360.f * uiScale, 280.f, 460.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect firstRect({cardX + 26.f * uiScale, cardY + 118.f * uiScale}, {cardW - 52.f * uiScale, 44.f * uiScale});
+                        const sf::FloatRect lastRect({cardX + 26.f * uiScale, cardY + 198.f * uiScale}, {cardW - 52.f * uiScale, 44.f * uiScale});
+                        const sf::FloatRect cancelRect({cardX + cardW - 252.f * uiScale, cardY + cardH - 56.f * uiScale}, {110.f * uiScale, 34.f * uiScale});
+                        const sf::FloatRect saveRect({cardX + cardW - 126.f * uiScale, cardY + cardH - 56.f * uiScale}, {110.f * uiScale, 34.f * uiScale});
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
+                        if (cancelRect.contains({mx,my})) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
+                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
+                        editFirstActive = firstRect.contains({mx,my});
+                        editLastActive = lastRect.contains({mx,my});
                     }
 
                     if (serverSettingsAnim > 0.01f) {
@@ -495,6 +532,27 @@ int main(int argc, char** argv) {
                         }
                     }
 
+                    if (profileOpen) {
+                        const float cardW = clampf(420.f * uiScale, 320.f, 560.f);
+                        const float cardH = clampf(640.f * uiScale, 440.f, static_cast<float>(size.y) - 40.f * uiScale);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const float topH = cardH * 0.34f;
+                        const float bodyY = cardY + topH;
+                        const float rowH = 38.f * uiScale;
+                        const sf::FloatRect nameRow({cardX + 20.f * uiScale, bodyY + 22.f * uiScale}, {cardW - 40.f * uiScale, rowH});
+                        const sf::FloatRect phoneRow({cardX + 20.f * uiScale, bodyY + 72.f * uiScale}, {cardW - 40.f * uiScale, rowH});
+                        const sf::FloatRect handleRow({cardX + 20.f * uiScale, bodyY + 122.f * uiScale}, {cardW - 40.f * uiScale, rowH});
+                        if (nameRow.contains({mx,my}) || phoneRow.contains({mx,my}) || handleRow.contains({mx,my})) {
+                            draftFirstName = profileFirstName;
+                            draftLastName = profileLastName;
+                            editProfileOpen = true;
+                            editFirstActive = true;
+                            editLastActive = false;
+                            continue;
+                        }
+                    }
+
                     if (settingsOpen) {
                         const bool insidePanel = (mx <= settingsPanelW);
                         if (!insidePanel) {
@@ -530,6 +588,41 @@ int main(int argc, char** argv) {
                                 serverPortDraft = std::to_string(serverPort);
                                 break;
                             }
+                        }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect ipRect({cardX + 28.f * uiScale, cardY + 150.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect portRect({cardX + 28.f * uiScale, cardY + 232.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect cancelRect({cardX + cardW - 232.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+                        const sf::FloatRect okRect({cardX + cardW - 124.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+
+                        if (okRect.contains({mx, my})) {
+                            serverIp = serverIpDraft;
+                            if (!serverPortDraft.empty()) serverPort = std::stoi(serverPortDraft);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+
+                            addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
+                            addLog("[CLIENT] Reconnecting...");
+                            reconnecting = true;
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
+                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            });
+                        } else if (cancelRect.contains({mx, my})) {
+                            serverIpDraft = serverIp;
+                            serverPortDraft = std::to_string(serverPort);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+                        } else {
+                            serverIpInputActive = ipRect.contains({mx, my});
+                            serverPortInputActive = portRect.contains({mx, my});
                         }
                     }
 
@@ -864,6 +957,37 @@ int main(int argc, char** argv) {
         }
 
 
+        const float targetEditProfile = editProfileOpen ? 1.f : 0.f;
+        editProfileAnim += (targetEditProfile - editProfileAnim) * 0.18f;
+        if (editProfileAnim > 0.01f) {
+            sf::RectangleShape dimE({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dimE.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(140.f * editProfileAnim)));
+            window.draw(dimE);
+            const float cardW = clampf(560.f * uiScale, 380.f, 700.f);
+            const float cardH = clampf(360.f * uiScale, 280.f, 460.f);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+            sf::RectangleShape card({cardW, cardH}); card.setPosition({cardX, cardY}); card.setFillColor(sf::Color(21, 36, 54)); window.draw(card);
+            sf::Text h(font, "Edit profile", fontSize(28, uiScale)); h.setFillColor(sf::Color(230,240,250)); h.setPosition({cardX+26.f*uiScale, cardY+18.f*uiScale}); window.draw(h);
+            sf::FloatRect firstRect({cardX + 26.f * uiScale, cardY + 118.f * uiScale}, {cardW - 52.f * uiScale, 44.f * uiScale});
+            sf::FloatRect lastRect({cardX + 26.f * uiScale, cardY + 198.f * uiScale}, {cardW - 52.f * uiScale, 44.f * uiScale});
+            sf::RectangleShape fbg(firstRect.size); fbg.setPosition(firstRect.position); fbg.setFillColor(sf::Color(16,30,47)); window.draw(fbg);
+            sf::RectangleShape lbg(lastRect.size); lbg.setPosition(lastRect.position); lbg.setFillColor(sf::Color(16,30,47)); window.draw(lbg);
+            sf::Text fl(font, "First name", fontSize(13, uiScale)); fl.setFillColor(sf::Color(130,167,197)); fl.setPosition({firstRect.position.x + 10.f*uiScale, firstRect.position.y+4.f*uiScale}); window.draw(fl);
+            sf::Text fv(font, draftFirstName, fontSize(18, uiScale)); fv.setFillColor(sf::Color(230,238,248)); fv.setPosition({firstRect.position.x + 10.f*uiScale, firstRect.position.y+20.f*uiScale}); window.draw(fv);
+            sf::Text ll(font, "Last name", fontSize(13, uiScale)); ll.setFillColor(sf::Color(130,167,197)); ll.setPosition({lastRect.position.x + 10.f*uiScale, lastRect.position.y+4.f*uiScale}); window.draw(ll);
+            sf::Text lv(font, draftLastName, fontSize(18, uiScale)); lv.setFillColor(sf::Color(230,238,248)); lv.setPosition({lastRect.position.x + 10.f*uiScale, lastRect.position.y+20.f*uiScale}); window.draw(lv);
+            sf::RectangleShape fu({firstRect.size.x, 2.f*uiScale}); fu.setPosition({firstRect.position.x, firstRect.position.y+firstRect.size.y-2.f*uiScale}); fu.setFillColor(editFirstActive?sf::Color(86,177,255):sf::Color(95,113,130)); window.draw(fu);
+            sf::RectangleShape lu({lastRect.size.x, 2.f*uiScale}); lu.setPosition({lastRect.position.x, lastRect.position.y+lastRect.size.y-2.f*uiScale}); lu.setFillColor(editLastActive?sf::Color(86,177,255):sf::Color(95,113,130)); window.draw(lu);
+            sf::FloatRect cancelRect({cardX + cardW - 252.f * uiScale, cardY + cardH - 56.f * uiScale}, {110.f * uiScale, 34.f * uiScale});
+            sf::FloatRect saveRect({cardX + cardW - 126.f * uiScale, cardY + cardH - 56.f * uiScale}, {110.f * uiScale, 34.f * uiScale});
+            sf::RectangleShape c(cancelRect.size); c.setPosition(cancelRect.position); c.setFillColor(sf::Color(63,78,95)); window.draw(c);
+            sf::RectangleShape sv(saveRect.size); sv.setPosition(saveRect.position); sv.setFillColor(sf::Color(49,118,188)); window.draw(sv);
+            sf::Text ct(font, "Cancel", fontSize(14, uiScale)); ct.setFillColor(sf::Color::White); ct.setPosition({cancelRect.position.x+22.f*uiScale, cancelRect.position.y+7.f*uiScale}); window.draw(ct);
+            sf::Text st(font, "Save", fontSize(14, uiScale)); st.setFillColor(sf::Color::White); st.setPosition({saveRect.position.x+30.f*uiScale, saveRect.position.y+7.f*uiScale}); window.draw(st);
+        }
+
+
         const float targetProfile = profileOpen ? 1.f : 0.f;
         profileAnim += (targetProfile - profileAnim) * 0.16f;
 
@@ -902,7 +1026,7 @@ int main(int argc, char** argv) {
             pAvatar.setPosition({pAvatarCX - pAvatarR, pAvatarCY - pAvatarR});
             window.draw(pAvatar);
 
-            sf::Text pName(font, "Username", fontSize(22, uiScale));
+            sf::Text pName(font, profileFirstName + " " + profileLastName, fontSize(22, uiScale));
             pName.setFillColor(sf::Color(232, 241, 252));
             auto b1 = pName.getLocalBounds();
             pName.setPosition({pAvatarCX - b1.size.x * 0.5f, pAvatarCY + pAvatarR + 12.f * uiScale});
@@ -916,11 +1040,11 @@ int main(int argc, char** argv) {
 
             const float infoX = cardX + 26.f * uiScale;
             float infoY = bodyY + 22.f * uiScale;
-            sf::Text t1(font, "@username", fontSize(18, uiScale)); t1.setFillColor(sf::Color(104, 176, 255)); t1.setPosition({infoX, infoY}); window.draw(t1);
+            sf::Text t1(font, profileHandle, fontSize(18, uiScale)); t1.setFillColor(sf::Color(104, 176, 255)); t1.setPosition({infoX, infoY}); window.draw(t1);
             infoY += 42.f * uiScale;
             sf::Text t2(font, "About me", fontSize(15, uiScale)); t2.setFillColor(sf::Color(143, 172, 197)); t2.setPosition({infoX, infoY}); window.draw(t2);
             infoY += 25.f * uiScale;
-            sf::Text t3(font, "I like coding and music", fontSize(16, uiScale)); t3.setFillColor(sf::Color(210, 225, 239)); t3.setPosition({infoX, infoY}); window.draw(t3);
+            sf::Text t3(font, profileBio, fontSize(16, uiScale)); t3.setFillColor(sf::Color(210, 225, 239)); t3.setPosition({infoX, infoY}); window.draw(t3);
             infoY += 48.f * uiScale;
             sf::Text t4(font, "Birthday", fontSize(15, uiScale)); t4.setFillColor(sf::Color(143, 172, 197)); t4.setPosition({infoX, infoY}); window.draw(t4);
             infoY += 25.f * uiScale;
