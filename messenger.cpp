@@ -390,7 +390,7 @@ int main(int argc, char** argv) {
     const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
     const std::vector<std::string> advancedSettingsItems = {
         "My account", "Notifications and sounds", "Privacy", "Chat settings",
-        "Chat folders", "Advanced", "Language", "Default scale", "Telegram Premium", "Saved messages"};
+        "Language", "Saved messages"};
 
     TcpClient client;
     bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
@@ -646,7 +646,7 @@ int main(int argc, char** argv) {
             window.draw(title);
 
             const float topBlockY = cardY + 64.f * uiScale + offsetY;
-            sf::RectangleShape topBlock({cardW, 124.f * uiScale});
+            sf::RectangleShape topBlock({cardW, 99.2f * uiScale});
             topBlock.setPosition({cardX, topBlockY});
             topBlock.setFillColor(sf::Color(19, 34, 51));
             window.draw(topBlock);
@@ -666,8 +666,8 @@ int main(int argc, char** argv) {
             handle.setPosition({cardX + 102.f * uiScale, topBlockY + 58.f * uiScale});
             window.draw(handle);
 
-            float itemY = topBlockY + 140.f * uiScale;
-            const float itemH = 44.f * uiScale;
+            float itemY = topBlockY + 112.f * uiScale;
+            const float itemH = 35.2f * uiScale;
             for (std::size_t i = 0; i < advancedSettingsItems.size(); ++i) {
                 const sf::FloatRect itemRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
                 const bool hovered = itemRect.contains(mousePos);
@@ -679,10 +679,10 @@ int main(int argc, char** argv) {
 
                 sf::Text row(font, advancedSettingsItems[i], fontSize(16, uiScale));
                 row.setFillColor(sf::Color(214, 230, 242));
-                row.setPosition({itemRect.position.x + 14.f * uiScale, itemRect.position.y + 9.f * uiScale});
+                row.setPosition({itemRect.position.x + 14.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(row);
 
-                itemY += itemH + 8.f * uiScale;
+                itemY += itemH + 6.4f * uiScale;
                 if (itemY > cardY + cardH - 60.f * uiScale + offsetY) break;
             }
         }
