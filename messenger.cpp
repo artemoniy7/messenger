@@ -547,6 +547,10 @@ int main(int argc, char** argv) {
                             serverSettingsOpen = false;
                             serverIpInputActive = false;
                             serverPortInputActive = false;
+
+                            connected = client.connectTo(serverIp, serverPort, "sfml_user");
+                            addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
+                            addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
                             serverPortDraft = std::to_string(serverPort);
