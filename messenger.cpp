@@ -390,8 +390,10 @@ int main(int argc, char** argv) {
     bool serverSettingsOpen = false;
     float serverSettingsAnim = 0.f;
     bool serverIpInputActive = false;
+    bool serverPortInputActive = false;
     std::string serverIpDraft = serverIp;
-    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Additional settings"};
+    std::string serverPortDraft = std::to_string(serverPort);
+    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings", "Additional settings"};
     const std::vector<std::string> advancedSettingsItems = {
         "My account", "Notifications and sounds", "Privacy", "Chat settings",
         "Language", "Saved messages"};
@@ -423,17 +425,21 @@ int main(int argc, char** argv) {
                 window.close();
             }
             if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
-                if (serverIpInputActive) {
+                if (serverIpInputActive || serverPortInputActive) {
                     const char32_t code = textEntered->unicode;
                     if (code == 8) {
-                        if (!serverIpDraft.empty()) serverIpDraft.pop_back();
+                        if (serverIpInputActive && !serverIpDraft.empty()) serverIpDraft.pop_back();
+                        if (serverPortInputActive && !serverPortDraft.empty()) serverPortDraft.pop_back();
                     } else if (code == 13 || code == 10) {
                         serverIpInputActive = false;
-                        serverIp = serverIpDraft;
+                        serverPortInputActive = false;
                     } else if (code >= 32 && code < 127) {
                         const char ch = static_cast<char>(code);
-                        if ((ch >= '0' && ch <= '9') || ch == '.') {
+                        if (serverIpInputActive && ((ch >= '0' && ch <= '9') || ch == '.')) {
                             if (serverIpDraft.size() < 15) serverIpDraft.push_back(ch);
+                        }
+                        if (serverPortInputActive && (ch >= '0' && ch <= '9')) {
+                            if (serverPortDraft.size() < 5) serverPortDraft.push_back(ch);
                         }
                     }
                 }
@@ -458,6 +464,7 @@ int main(int argc, char** argv) {
                         if (!insideCard) {
                             serverSettingsOpen = false;
                             serverIpInputActive = false;
+                            serverPortInputActive = false;
                             continue;
                         }
                     }
@@ -509,11 +516,46 @@ int main(int argc, char** argv) {
                                 profileOpen = true;
                                 break;
                             }
+                            if (hit && i == settingsItems.size() - 2) {
+                                settingsOpen = false;
+                                advancedSettingsOpen = true;
+                                break;
+                            }
                             if (hit && i == settingsItems.size() - 1) {
                                 settingsOpen = false;
                                 serverSettingsOpen = true;
+                                serverIpDraft = serverIp;
+                                serverPortDraft = std::to_string(serverPort);
                                 break;
                             }
+                        }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect ipRect({cardX + 28.f * uiScale, cardY + 150.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect portRect({cardX + 28.f * uiScale, cardY + 232.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect cancelRect({cardX + cardW - 232.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+                        const sf::FloatRect okRect({cardX + cardW - 124.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+
+                        if (okRect.contains({mx, my})) {
+                            serverIp = serverIpDraft;
+                            if (!serverPortDraft.empty()) serverPort = std::stoi(serverPortDraft);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+                        } else if (cancelRect.contains({mx, my})) {
+                            serverIpDraft = serverIp;
+                            serverPortDraft = std::to_string(serverPort);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+                        } else {
+                            serverIpInputActive = ipRect.contains({mx, my});
+                            serverPortInputActive = portRect.contains({mx, my});
                         }
                     }
 
@@ -688,31 +730,54 @@ int main(int argc, char** argv) {
             titleSrv.setPosition({cardX + 28.f * uiScale, cardY + 22.f * uiScale + offsetY});
             window.draw(titleSrv);
 
-            sf::Text sub(font, "Server IP", fontSize(16, uiScale));
-            sub.setFillColor(sf::Color(156, 185, 210));
-            sub.setPosition({cardX + 28.f * uiScale, cardY + 136.f * uiScale + offsetY});
-            window.draw(sub);
+            const sf::FloatRect ipRect({cardX + 28.f * uiScale, cardY + 150.f * uiScale + offsetY}, {cardW - 56.f * uiScale, 52.f * uiScale});
+            sf::RectangleShape ipBg(ipRect.size);
+            ipBg.setPosition(ipRect.position);
+            ipBg.setFillColor(sf::Color(20, 36, 54));
+            window.draw(ipBg);
 
-            const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale + offsetY}, {cardW - 56.f * uiScale, 52.f * uiScale});
-            sf::RectangleShape inputBg(inputRect.size);
-            inputBg.setPosition(inputRect.position);
-            inputBg.setFillColor(sf::Color(20, 36, 54));
-            window.draw(inputBg);
+            sf::Text ipLabel(font, "Editing: server ip", fontSize(13, uiScale));
+            ipLabel.setFillColor(sf::Color(138, 169, 195));
+            ipLabel.setPosition({ipRect.position.x + 12.f * uiScale, ipRect.position.y + 6.f * uiScale});
+            window.draw(ipLabel);
 
-            sf::Text changeLabel(font, "Editing: server ip", fontSize(13, uiScale));
-            changeLabel.setFillColor(sf::Color(138, 169, 195));
-            changeLabel.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 6.f * uiScale});
-            window.draw(changeLabel);
+            sf::Text ipValue(font, serverIpDraft.empty() ? "0.0.0.0" : serverIpDraft, fontSize(18, uiScale));
+            ipValue.setFillColor(sf::Color(225, 238, 249));
+            ipValue.setPosition({ipRect.position.x + 12.f * uiScale, ipRect.position.y + 24.f * uiScale});
+            window.draw(ipValue);
 
-            sf::Text value(font, serverIpDraft.empty() ? "0.0.0.0" : serverIpDraft, fontSize(18, uiScale));
-            value.setFillColor(sf::Color(225, 238, 249));
-            value.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 24.f * uiScale});
-            window.draw(value);
+            sf::RectangleShape ipUnderline({ipRect.size.x, 3.f * uiScale});
+            ipUnderline.setPosition({ipRect.position.x, ipRect.position.y + ipRect.size.y - 3.f * uiScale});
+            ipUnderline.setFillColor(serverIpInputActive ? sf::Color(86, 177, 255) : sf::Color(109, 125, 139));
+            window.draw(ipUnderline);
 
-            sf::RectangleShape underline({inputRect.size.x, 3.f * uiScale});
-            underline.setPosition({inputRect.position.x, inputRect.position.y + inputRect.size.y - 3.f * uiScale});
-            underline.setFillColor(serverIpInputActive ? sf::Color(86, 177, 255) : sf::Color(109, 125, 139));
-            window.draw(underline);
+            const sf::FloatRect portRect({cardX + 28.f * uiScale, cardY + 232.f * uiScale + offsetY}, {cardW - 56.f * uiScale, 52.f * uiScale});
+            sf::RectangleShape portBg(portRect.size);
+            portBg.setPosition(portRect.position);
+            portBg.setFillColor(sf::Color(20, 36, 54));
+            window.draw(portBg);
+
+            sf::Text portLabel(font, "Editing: server port", fontSize(13, uiScale));
+            portLabel.setFillColor(sf::Color(138, 169, 195));
+            portLabel.setPosition({portRect.position.x + 12.f * uiScale, portRect.position.y + 6.f * uiScale});
+            window.draw(portLabel);
+
+            sf::Text portValue(font, serverPortDraft.empty() ? "5000" : serverPortDraft, fontSize(18, uiScale));
+            portValue.setFillColor(sf::Color(225, 238, 249));
+            portValue.setPosition({portRect.position.x + 12.f * uiScale, portRect.position.y + 24.f * uiScale});
+            window.draw(portValue);
+
+            sf::RectangleShape portUnderline({portRect.size.x, 3.f * uiScale});
+            portUnderline.setPosition({portRect.position.x, portRect.position.y + portRect.size.y - 3.f * uiScale});
+            portUnderline.setFillColor(serverPortInputActive ? sf::Color(86, 177, 255) : sf::Color(109, 125, 139));
+            window.draw(portUnderline);
+
+            const sf::FloatRect cancelRect({cardX + cardW - 232.f * uiScale, cardY + cardH - 60.f * uiScale + offsetY}, {96.f * uiScale, 36.f * uiScale});
+            const sf::FloatRect okRect({cardX + cardW - 124.f * uiScale, cardY + cardH - 60.f * uiScale + offsetY}, {96.f * uiScale, 36.f * uiScale});
+            sf::RectangleShape cancelBtn(cancelRect.size); cancelBtn.setPosition(cancelRect.position); cancelBtn.setFillColor(sf::Color(63, 78, 95)); window.draw(cancelBtn);
+            sf::RectangleShape okBtn(okRect.size); okBtn.setPosition(okRect.position); okBtn.setFillColor(sf::Color(49, 118, 188)); window.draw(okBtn);
+            sf::Text cancelText(font, "Cancel", fontSize(14, uiScale)); cancelText.setFillColor(sf::Color(226, 236, 246)); cancelText.setPosition({cancelRect.position.x + 18.f * uiScale, cancelRect.position.y + 8.f * uiScale}); window.draw(cancelText);
+            sf::Text okText(font, "OK", fontSize(14, uiScale)); okText.setFillColor(sf::Color(236, 246, 255)); okText.setPosition({okRect.position.x + 34.f * uiScale, okRect.position.y + 8.f * uiScale}); window.draw(okText);
         }
 
 
