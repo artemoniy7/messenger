@@ -563,6 +563,16 @@ int main(int argc, char** argv) {
                         }
                     }
 
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        serverIpInputActive = inputRect.contains({mx,my});
+                        if (!serverIpInputActive) serverIp = serverIpDraft;
+                    }
+
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
                     const float startY = topPad + 28.f * uiScale;
                     const float stepY = 58.f * uiScale;
