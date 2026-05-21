@@ -387,7 +387,11 @@ int main(int argc, char** argv) {
     float profileAnim = 0.f;
     bool advancedSettingsOpen = false;
     float advancedSettingsAnim = 0.f;
-    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Settings"};
+    bool serverSettingsOpen = false;
+    float serverSettingsAnim = 0.f;
+    bool serverIpInputActive = false;
+    std::string serverIpDraft = serverIp;
+    const std::vector<std::string> settingsItems = {"My profile", "Create group", "Contacts", "Favorites", "Additional settings"};
     const std::vector<std::string> advancedSettingsItems = {
         "My account", "Notifications and sounds", "Privacy", "Chat settings",
         "Language", "Saved messages"};
@@ -418,6 +422,22 @@ int main(int argc, char** argv) {
                 storage.save(chats);
                 window.close();
             }
+            if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (serverIpInputActive) {
+                    const char32_t code = textEntered->unicode;
+                    if (code == 8) {
+                        if (!serverIpDraft.empty()) serverIpDraft.pop_back();
+                    } else if (code == 13 || code == 10) {
+                        serverIpInputActive = false;
+                        serverIp = serverIpDraft;
+                    } else if (code >= 32 && code < 127) {
+                        const char ch = static_cast<char>(code);
+                        if ((ch >= '0' && ch <= '9') || ch == '.') {
+                            if (serverIpDraft.size() < 15) serverIpDraft.push_back(ch);
+                        }
+                    }
+                }
+            }
             if (const auto* pressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                 if (pressed->button == sf::Mouse::Button::Left) {
                     const float mx = static_cast<float>(pressed->position.x);
@@ -427,6 +447,19 @@ int main(int argc, char** argv) {
                     if (onSettingsButton) {
                         settingsOpen = true;
                         continue;
+                    }
+
+                    if (serverSettingsAnim > 0.01f) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
+                        if (!insideCard) {
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            continue;
+                        }
                     }
 
                     if (advancedSettingsAnim > 0.01f) {
@@ -478,10 +511,20 @@ int main(int argc, char** argv) {
                             }
                             if (hit && i == settingsItems.size() - 1) {
                                 settingsOpen = false;
-                                advancedSettingsOpen = true;
+                                serverSettingsOpen = true;
                                 break;
                             }
                         }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        serverIpInputActive = inputRect.contains({mx,my});
+                        if (!serverIpInputActive) serverIp = serverIpDraft;
                     }
 
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
@@ -618,6 +661,58 @@ int main(int argc, char** argv) {
                 itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(itemText);
             }
+        }
+
+
+        const float targetServerSettings = serverSettingsOpen ? 1.f : 0.f;
+        serverSettingsAnim += (targetServerSettings - serverSettingsAnim) * 0.16f;
+
+        if (serverSettingsAnim > 0.01f) {
+            sf::RectangleShape dimSrv({static_cast<float>(size.x), static_cast<float>(size.y)});
+            dimSrv.setFillColor(sf::Color(0, 0, 0, static_cast<std::uint8_t>(120.f * serverSettingsAnim)));
+            window.draw(dimSrv);
+
+            const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+            const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+            const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+            const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+            const float offsetY = (1.f - serverSettingsAnim) * 20.f * uiScale;
+
+            sf::RectangleShape cardSrv({cardW, cardH});
+            cardSrv.setPosition({cardX, cardY + offsetY});
+            cardSrv.setFillColor(sf::Color(14, 27, 42));
+            window.draw(cardSrv);
+
+            sf::Text titleSrv(font, "Additional settings", fontSize(24, uiScale));
+            titleSrv.setFillColor(sf::Color(228, 238, 248));
+            titleSrv.setPosition({cardX + 28.f * uiScale, cardY + 22.f * uiScale + offsetY});
+            window.draw(titleSrv);
+
+            sf::Text sub(font, "Server IP", fontSize(16, uiScale));
+            sub.setFillColor(sf::Color(156, 185, 210));
+            sub.setPosition({cardX + 28.f * uiScale, cardY + 136.f * uiScale + offsetY});
+            window.draw(sub);
+
+            const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale + offsetY}, {cardW - 56.f * uiScale, 52.f * uiScale});
+            sf::RectangleShape inputBg(inputRect.size);
+            inputBg.setPosition(inputRect.position);
+            inputBg.setFillColor(sf::Color(20, 36, 54));
+            window.draw(inputBg);
+
+            sf::Text changeLabel(font, "Editing: server ip", fontSize(13, uiScale));
+            changeLabel.setFillColor(sf::Color(138, 169, 195));
+            changeLabel.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 6.f * uiScale});
+            window.draw(changeLabel);
+
+            sf::Text value(font, serverIpDraft.empty() ? "0.0.0.0" : serverIpDraft, fontSize(18, uiScale));
+            value.setFillColor(sf::Color(225, 238, 249));
+            value.setPosition({inputRect.position.x + 12.f * uiScale, inputRect.position.y + 24.f * uiScale});
+            window.draw(value);
+
+            sf::RectangleShape underline({inputRect.size.x, 3.f * uiScale});
+            underline.setPosition({inputRect.position.x, inputRect.position.y + inputRect.size.y - 3.f * uiScale});
+            underline.setFillColor(serverIpInputActive ? sf::Color(86, 177, 255) : sf::Color(109, 125, 139));
+            window.draw(underline);
         }
 
 
