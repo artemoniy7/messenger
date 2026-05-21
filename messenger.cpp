@@ -626,6 +626,51 @@ int main(int argc, char** argv) {
                         }
                     }
 
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect ipRect({cardX + 28.f * uiScale, cardY + 150.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect portRect({cardX + 28.f * uiScale, cardY + 232.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        const sf::FloatRect cancelRect({cardX + cardW - 232.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+                        const sf::FloatRect okRect({cardX + cardW - 124.f * uiScale, cardY + cardH - 60.f * uiScale}, {96.f * uiScale, 36.f * uiScale});
+
+                        if (okRect.contains({mx, my})) {
+                            serverIp = serverIpDraft;
+                            if (!serverPortDraft.empty()) serverPort = std::stoi(serverPortDraft);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+
+                            addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
+                            addLog("[CLIENT] Reconnecting...");
+                            reconnecting = true;
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
+                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            });
+                        } else if (cancelRect.contains({mx, my})) {
+                            serverIpDraft = serverIp;
+                            serverPortDraft = std::to_string(serverPort);
+                            serverSettingsOpen = false;
+                            serverIpInputActive = false;
+                            serverPortInputActive = false;
+                        } else {
+                            serverIpInputActive = ipRect.contains({mx, my});
+                            serverPortInputActive = portRect.contains({mx, my});
+                        }
+                    }
+
+                    if (serverSettingsOpen) {
+                        const float cardW = clampf(520.f * uiScale, 380.f, 640.f);
+                        const float cardH = clampf(420.f * uiScale, 320.f, 520.f);
+                        const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
+                        const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
+                        const sf::FloatRect inputRect({cardX + 28.f * uiScale, cardY + 182.f * uiScale}, {cardW - 56.f * uiScale, 52.f * uiScale});
+                        serverIpInputActive = inputRect.contains({mx,my});
+                        if (!serverIpInputActive) serverIp = serverIpDraft;
+                    }
+
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
                     const float startY = topPad + 28.f * uiScale;
                     const float stepY = 58.f * uiScale;
