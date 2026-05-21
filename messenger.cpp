@@ -532,23 +532,21 @@ int main(int argc, char** argv) {
                         }
                     }
 
-                    if (profileOpen) {
-                        const float cardW = clampf(420.f * uiScale, 320.f, 560.f);
-                        const float cardH = clampf(640.f * uiScale, 440.f, static_cast<float>(size.y) - 40.f * uiScale);
+                    if (advancedSettingsOpen) {
+                        const float cardW = clampf(500.f * uiScale, 360.f, 600.f);
+                        const float cardH = clampf(700.f * uiScale, 520.f, static_cast<float>(size.y) - 24.f * uiScale);
                         const float cardX = (static_cast<float>(size.x) - cardW) * 0.5f;
                         const float cardY = (static_cast<float>(size.y) - cardH) * 0.5f;
-                        const float topH = cardH * 0.34f;
-                        const float bodyY = cardY + topH;
-                        const float rowH = 38.f * uiScale;
-                        const sf::FloatRect nameRow({cardX + 20.f * uiScale, bodyY + 22.f * uiScale}, {cardW - 40.f * uiScale, rowH});
-                        const sf::FloatRect phoneRow({cardX + 20.f * uiScale, bodyY + 72.f * uiScale}, {cardW - 40.f * uiScale, rowH});
-                        const sf::FloatRect handleRow({cardX + 20.f * uiScale, bodyY + 122.f * uiScale}, {cardW - 40.f * uiScale, rowH});
-                        if (nameRow.contains({mx,my}) || phoneRow.contains({mx,my}) || handleRow.contains({mx,my})) {
+                        const float itemH = 35.2f * uiScale;
+                        float itemY = cardY + 64.f * uiScale + 99.2f * uiScale + 112.f * uiScale;
+                        const sf::FloatRect myAccountRect({cardX + 18.f * uiScale, itemY}, {cardW - 36.f * uiScale, itemH});
+                        if (myAccountRect.contains({mx, my})) {
                             draftFirstName = profileFirstName;
                             draftLastName = profileLastName;
                             editProfileOpen = true;
                             editFirstActive = true;
                             editLastActive = false;
+                            advancedSettingsOpen = false;
                             continue;
                         }
                     }
