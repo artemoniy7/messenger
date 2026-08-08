@@ -186,6 +186,23 @@ class ChatServer:
         with self._lock:
             return self._clients_by_sock.pop(client_sock, None)
 
+
+    def _connected_names(self) -> list[str]:
+        with self._lock:
+            return [client.name for client in self._clients_by_sock.values()]
+
+    def _user_list_payload(self) -> str:
+        return "USERS " + "|".join(self._connected_names())
+
+    def _send_user_list(self, sock: socket.socket) -> None:
+        try:
+            sock.sendall((self._user_list_payload() + "\n").encode("utf-8", errors="replace"))
+        except OSError:
+            self._remove_client(sock)
+
+    def _broadcast_user_list(self) -> None:
+        self._broadcast(self._user_list_payload())
+
     def _broadcast(self, message: str, *, exclude: Optional[socket.socket] = None) -> None:
         data = (message + "\n").encode("utf-8", errors="replace")
 
@@ -225,6 +242,7 @@ class ChatServer:
             client = self._register_client(client_sock, addr, name)
 
             client_sock.sendall(f"OK {client.name}\n".encode("utf-8"))
+            self._broadcast_user_list()
             self._broadcast(f"[SERVER] {client.name} joined the chat", exclude=client_sock)
 
             while self._running.is_set():
@@ -238,12 +256,17 @@ class ChatServer:
                 if line.startswith("/quit"):
                     break
 
+                if line.startswith("/users"):
+                    self._send_user_list(client_sock)
+                    continue
+
                 if line.startswith("/name "):
                     new_name = self._sanitize_name(line[6:], fallback=client.name)
                     old_name = client.name
                     client.name = new_name
                     client_sock.sendall(f"[SERVER] Your new name: {new_name}\n".encode("utf-8"))
                     if old_name != new_name:
+                        self._broadcast_user_list()
                         self._broadcast(f"[SERVER] {old_name} is now known as {new_name}", exclude=client_sock)
                     continue
 
@@ -262,6 +285,7 @@ class ChatServer:
                 pass
 
             if removed is not None:
+                self._broadcast_user_list()
                 self._broadcast(f"[SERVER] {removed.name} left the chat")
                 print(f"[INFO] Disconnected {removed.name} ({removed.addr[0]}:{removed.addr[1]})")
 
@@ -270,7 +294,7 @@ class ChatServer:
         cleaned = raw_name.strip()
         if not cleaned:
             return fallback
-        cleaned = cleaned.replace("\n", " ").replace("\r", " ")
+        cleaned = cleaned.replace("\n", " ").replace("\r", " ").replace("|", "_")
         return cleaned[:24]
 
 
