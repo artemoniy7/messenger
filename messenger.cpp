@@ -16,6 +16,7 @@
 #include <vector>
 #include <set>
 #include <future>
+#include <cctype>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -45,6 +46,74 @@ struct ChatItem {
     std::string title;
     std::vector<std::string> messages;
 };
+
+struct ContactItem {
+    std::string firstName;
+    std::string lastName;
+    std::string username;
+};
+
+std::string toLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+std::string usernameFromHandle(std::string handle) {
+    if (!handle.empty() && handle.front() == '@') handle.erase(handle.begin());
+    if (handle.empty()) return "user";
+    std::replace(handle.begin(), handle.end(), '|', '_');
+    return handle;
+}
+
+std::string formatProfileCommand(const std::string& firstName, const std::string& lastName, const std::string& handle) {
+    auto clean = [](std::string value) {
+        std::replace(value.begin(), value.end(), '|', '_');
+        std::replace(value.begin(), value.end(), '\x1f', '_');
+        return value;
+    };
+    return "/profile " + clean(firstName) + "\x1f" + clean(lastName) + "\x1f" + clean(usernameFromHandle(handle));
+}
+
+ContactItem contactFromUsername(const std::string& rawUsername) {
+    std::string username = rawUsername.empty() ? "user" : rawUsername;
+    std::replace(username.begin(), username.end(), '|', '_');
+
+    ContactItem contact;
+    contact.username = username.front() == '@' ? username : "@" + username;
+
+    std::string display = username;
+    if (!display.empty() && display.front() == '@') display.erase(display.begin());
+    std::replace(display.begin(), display.end(), '_', ' ');
+    std::replace(display.begin(), display.end(), '.', ' ');
+
+    const auto space = display.find(' ');
+    contact.firstName = space == std::string::npos ? display : display.substr(0, space);
+    contact.lastName = space == std::string::npos ? "Online" : display.substr(space + 1);
+    if (contact.firstName.empty()) contact.firstName = "User";
+    if (contact.lastName.empty()) contact.lastName = "Online";
+    return contact;
+}
+
+ContactItem contactFromServerEntry(const std::string& entry) {
+    std::array<std::string, 3> parts;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const std::size_t sep = entry.find('\x1f', start);
+        parts[i] = entry.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+        if (sep == std::string::npos) break;
+        start = sep + 1;
+    }
+
+    if (parts[1].empty() && parts[2].empty()) return contactFromUsername(entry);
+
+    ContactItem contact;
+    contact.firstName = parts[0].empty() ? "User" : parts[0];
+    contact.lastName = parts[1].empty() ? "Online" : parts[1];
+    contact.username = parts[2].empty() ? "@user" : (parts[2].front() == '@' ? parts[2] : "@" + parts[2]);
+    return contact;
+}
 
 class ChatStorage {
 public:
@@ -146,11 +215,18 @@ public:
         return ::send(sock_, data.c_str(), static_cast<int>(data.size()), 0) >= 0;
     }
 
+    void requestContacts() { sendLine("/users"); }
+
     std::vector<std::string> consumeMessages() {
         std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::string> out;
         out.swap(messages_);
         return out;
+    }
+
+    std::vector<ContactItem> contacts() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return contacts_;
     }
 
     bool isConnected() const { return connected_.load(); }
@@ -172,8 +248,23 @@ private:
             while ((pos = buffer.find('\n')) != std::string::npos) {
                 std::string line = buffer.substr(0, pos);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
-                std::lock_guard<std::mutex> lock(mutex_);
-                messages_.push_back(line);
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (line.rfind("USERS ", 0) == 0) {
+                        contacts_.clear();
+                        std::string users = line.substr(6);
+                        std::size_t start = 0;
+                        while (start <= users.size()) {
+                            const std::size_t sep = users.find('|', start);
+                            std::string name = users.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+                            if (!name.empty()) contacts_.push_back(contactFromServerEntry(name));
+                            if (sep == std::string::npos) break;
+                            start = sep + 1;
+                        }
+                    } else {
+                        messages_.push_back(line);
+                    }
+                }
                 buffer.erase(0, pos + 1);
             }
         }
@@ -195,8 +286,9 @@ private:
     SocketHandle sock_ = kInvalidSocket;
     std::atomic<bool> connected_{false};
     std::thread receiver_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::vector<std::string> messages_;
+    std::vector<ContactItem> contacts_;
     std::string lastError_;
 };
 
@@ -353,6 +445,32 @@ std::string discoverServerIp(int port) {
     return "127.0.0.1";
 }
 
+
+void drawRoundedRect(sf::RenderWindow& window, const sf::FloatRect& rect, float radius, sf::Color color) {
+    radius = clampf(radius, 0.f, std::min(rect.size.x, rect.size.y) * 0.5f);
+
+    sf::RectangleShape center({rect.size.x - 2.f * radius, rect.size.y});
+    center.setPosition({rect.position.x + radius, rect.position.y});
+    center.setFillColor(color);
+    window.draw(center);
+
+    sf::RectangleShape middle({rect.size.x, rect.size.y - 2.f * radius});
+    middle.setPosition({rect.position.x, rect.position.y + radius});
+    middle.setFillColor(color);
+    window.draw(middle);
+
+    for (const sf::Vector2f corner : std::array<sf::Vector2f, 4>{
+             sf::Vector2f{rect.position.x, rect.position.y},
+             sf::Vector2f{rect.position.x + rect.size.x - 2.f * radius, rect.position.y},
+             sf::Vector2f{rect.position.x, rect.position.y + rect.size.y - 2.f * radius},
+             sf::Vector2f{rect.position.x + rect.size.x - 2.f * radius, rect.position.y + rect.size.y - 2.f * radius}}) {
+        sf::CircleShape circle(radius);
+        circle.setPosition(corner);
+        circle.setFillColor(color);
+        window.draw(circle);
+    }
+}
+
 sf::Color avatarColor(std::size_t i) {
     return sf::Color(70 + static_cast<int>((i * 23) % 110), 95 + static_cast<int>((i * 37) % 100), 120 + static_cast<int>((i * 17) % 90));
 }
@@ -383,6 +501,10 @@ int main(int argc, char** argv) {
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
     float settingsAnim = 0.f;
+    bool contactsOpen = false;
+    float contactsAnim = 0.f;
+    bool contactsSearchActive = false;
+    std::string contactsSearch;
     bool profileOpen = false;
     float profileAnim = 0.f;
     std::string profileFirstName = "Username";
@@ -410,7 +532,7 @@ int main(int argc, char** argv) {
         "Language", "Saved messages"};
 
     TcpClient client;
-    bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
+    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
 
     std::vector<std::string> serverLog;
     bool reconnecting = false;
@@ -421,6 +543,7 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
+    if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
 
     while (window.isOpen()) {
         const auto size = window.getSize();
@@ -444,6 +567,13 @@ int main(int argc, char** argv) {
                     if (code == 8) { if (!target->empty()) target->pop_back(); }
                     else if (code == 13 || code == 10) { editFirstActive = false; editLastActive = false; }
                     else if (code >= 32 && code < 127) { if (target->size() < 20) target->push_back(static_cast<char>(code)); }
+                }
+
+                if (contactsSearchActive) {
+                    const char32_t code = textEntered->unicode;
+                    if (code == 8) { if (!contactsSearch.empty()) contactsSearch.pop_back(); }
+                    else if (code == 13 || code == 10) { contactsSearchActive = false; }
+                    else if (code >= 32 && code < 127) { if (contactsSearch.size() < 36) contactsSearch.push_back(static_cast<char>(code)); }
                 }
 
                 if (serverIpInputActive || serverPortInputActive) {
@@ -473,6 +603,8 @@ int main(int argc, char** argv) {
                     const bool onSettingsButton = (mx >= 8.f * uiScale && mx <= leftW - 8.f * uiScale && my >= 12.f * uiScale && my <= 12.f * uiScale + settingsBtnH);
                     if (onSettingsButton) {
                         settingsOpen = true;
+                        contactsOpen = false;
+                        contactsSearchActive = false;
                         continue;
                     }
 
@@ -489,7 +621,7 @@ int main(int argc, char** argv) {
                         const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
                         if (!insideCard) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
                         if (cancelRect.contains({mx,my})) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
-                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
+                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
                         editFirstActive = firstRect.contains({mx,my});
                         editLastActive = lastRect.contains({mx,my});
                     }
@@ -578,6 +710,13 @@ int main(int argc, char** argv) {
                                 profileOpen = true;
                                 break;
                             }
+                            if (hit && i == 2) {
+                                settingsOpen = false;
+                                contactsOpen = true;
+                                contactsSearchActive = false;
+                                client.requestContacts();
+                                break;
+                            }
                             if (hit && i == settingsItems.size() - 2) {
                                 settingsOpen = false;
                                 advancedSettingsOpen = true;
@@ -613,8 +752,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -648,8 +787,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -683,8 +822,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -708,6 +847,17 @@ int main(int argc, char** argv) {
                         if (!serverIpInputActive) serverIp = serverIpDraft;
                     }
 
+                    if (contactsOpen) {
+                        const float panelW = clampf(380.f * uiScale, 300.f, 480.f);
+                        const sf::FloatRect searchRect({leftW + 18.f * uiScale, 20.f * uiScale}, {panelW - 36.f * uiScale, 42.f * uiScale});
+                        const bool insideContacts = mx >= leftW && mx <= leftW + panelW;
+                        if (searchRect.contains({mx, my})) {
+                            contactsSearchActive = true;
+                        } else if (!insideContacts) {
+                            contactsSearchActive = false;
+                        }
+                    }
+
                     const float radius = clampf(22.f * uiScale, 16.f, 34.f);
                     const float startY = topPad + 28.f * uiScale;
                     const float stepY = 58.f * uiScale;
@@ -728,6 +878,7 @@ int main(int argc, char** argv) {
             connected = reconnectTask.get();
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
+            if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
         }
 
 
@@ -819,17 +970,17 @@ int main(int argc, char** argv) {
             profileAvatar.setPosition({avatarCx - avatarRadius, avatarCy - avatarRadius});
             window.draw(profileAvatar);
 
-            sf::Text profileName(font, "Username", fontSize(20, uiScale));
+            sf::Text profileName(font, profileFirstName + " " + profileLastName, fontSize(20, uiScale));
             profileName.setFillColor(sf::Color(220, 235, 247));
             const auto profileBounds = profileName.getLocalBounds();
             profileName.setPosition({avatarCx - profileBounds.size.x * 0.5f, avatarCy + avatarRadius + 18.f * uiScale});
             window.draw(profileName);
 
-            sf::Text profileHandle(font, "@username", fontSize(15, uiScale));
-            profileHandle.setFillColor(sf::Color(148, 178, 205));
-            const auto handleBounds = profileHandle.getLocalBounds();
-            profileHandle.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
-            window.draw(profileHandle);
+            sf::Text profileHandleText(font, profileHandle, fontSize(15, uiScale));
+            profileHandleText.setFillColor(sf::Color(148, 178, 205));
+            const auto handleBounds = profileHandleText.getLocalBounds();
+            profileHandleText.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
+            window.draw(profileHandleText);
 
             const float itemsStartY = avatarCy + avatarRadius + 96.f * uiScale;
             const float itemH = 34.f * uiScale;
@@ -848,6 +999,73 @@ int main(int argc, char** argv) {
                 itemText.setFillColor(hovered ? sf::Color(245, 250, 255) : sf::Color(186, 209, 230));
                 itemText.setPosition({itemRect.position.x + 12.f * uiScale, itemRect.position.y + 7.f * uiScale});
                 window.draw(itemText);
+            }
+        }
+
+
+        const float targetContacts = contactsOpen ? 1.f : 0.f;
+        contactsAnim += (targetContacts - contactsAnim) * 0.18f;
+        if (contactsAnim > 0.01f) {
+            const float panelW = clampf(380.f * uiScale, 300.f, 480.f);
+            const float panelX = leftW - panelW + panelW * contactsAnim;
+            sf::RectangleShape contactsPanel({panelW, static_cast<float>(size.y)});
+            contactsPanel.setPosition({panelX, 0.f});
+            contactsPanel.setFillColor(sf::Color(12, 25, 40));
+            window.draw(contactsPanel);
+
+            const sf::FloatRect searchRect({panelX + 18.f * uiScale, 20.f * uiScale}, {panelW - 36.f * uiScale, 42.f * uiScale});
+            drawRoundedRect(window, searchRect, 16.f * uiScale, sf::Color(24, 42, 60));
+
+            sf::Text searchText(font, contactsSearch.empty() ? "Search people" : contactsSearch, fontSize(15, uiScale));
+            searchText.setFillColor(contactsSearch.empty() ? sf::Color(120, 150, 176) : sf::Color(225, 238, 249));
+            searchText.setPosition({searchRect.position.x + 16.f * uiScale, searchRect.position.y + 11.f * uiScale});
+            window.draw(searchText);
+
+            sf::RectangleShape searchUnderline({searchRect.size.x - 24.f * uiScale, 2.f * uiScale});
+            searchUnderline.setPosition({searchRect.position.x + 12.f * uiScale, searchRect.position.y + searchRect.size.y - 4.f * uiScale});
+            searchUnderline.setFillColor(contactsSearchActive ? sf::Color(86, 177, 255) : sf::Color(68, 91, 112));
+            window.draw(searchUnderline);
+
+            sf::Text title(font, "Contacts", fontSize(22, uiScale));
+            title.setFillColor(sf::Color(231, 240, 249));
+            title.setPosition({panelX + 20.f * uiScale, 78.f * uiScale});
+            window.draw(title);
+
+            const auto contacts = client.contacts();
+            const std::string filter = toLowerAscii(contactsSearch);
+            float rowY = 122.f * uiScale;
+            std::size_t visible = 0;
+            for (std::size_t i = 0; i < contacts.size(); ++i) {
+                const auto& contact = contacts[i];
+                const std::string haystack = toLowerAscii(contact.firstName + " " + contact.lastName + " " + contact.username);
+                if (!filter.empty() && haystack.find(filter) == std::string::npos) continue;
+                if (rowY > static_cast<float>(size.y) - 72.f * uiScale) break;
+
+                sf::CircleShape avatar(clampf(24.f * uiScale, 18.f, 32.f));
+                const float avatarR = avatar.getRadius();
+                avatar.setFillColor(avatarColor(i));
+                avatar.setPosition({panelX + 22.f * uiScale, rowY});
+                window.draw(avatar);
+
+                sf::Text name(font, contact.firstName + " " + contact.lastName, fontSize(16, uiScale));
+                name.setFillColor(sf::Color(226, 238, 249));
+                name.setPosition({panelX + 86.f * uiScale, rowY + 3.f * uiScale});
+                window.draw(name);
+
+                sf::Text username(font, contact.username, fontSize(13, uiScale));
+                username.setFillColor(sf::Color(136, 171, 201));
+                username.setPosition({panelX + 86.f * uiScale, rowY + 29.f * uiScale});
+                window.draw(username);
+
+                rowY += 64.f * uiScale;
+                ++visible;
+            }
+
+            if (visible == 0) {
+                sf::Text empty(font, connected ? "No users found" : "Connect to a server", fontSize(15, uiScale));
+                empty.setFillColor(sf::Color(132, 161, 188));
+                empty.setPosition({panelX + 22.f * uiScale, rowY});
+                window.draw(empty);
             }
         }
 
@@ -962,12 +1180,12 @@ int main(int argc, char** argv) {
             avatar.setPosition({cardX + 20.f * uiScale, topBlockY + 18.f * uiScale});
             window.draw(avatar);
 
-            sf::Text name(font, "Username", fontSize(20, uiScale));
+            sf::Text name(font, profileFirstName + " " + profileLastName, fontSize(20, uiScale));
             name.setFillColor(sf::Color(231, 240, 249));
             name.setPosition({cardX + 102.f * uiScale, topBlockY + 26.f * uiScale});
             window.draw(name);
 
-            sf::Text handle(font, "@username", fontSize(15, uiScale));
+            sf::Text handle(font, profileHandle, fontSize(15, uiScale));
             handle.setFillColor(sf::Color(134, 171, 202));
             handle.setPosition({cardX + 102.f * uiScale, topBlockY + 58.f * uiScale});
             window.draw(handle);
