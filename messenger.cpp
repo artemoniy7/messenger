@@ -60,6 +60,22 @@ std::string toLowerAscii(std::string value) {
     return value;
 }
 
+std::string usernameFromHandle(std::string handle) {
+    if (!handle.empty() && handle.front() == '@') handle.erase(handle.begin());
+    if (handle.empty()) return "user";
+    std::replace(handle.begin(), handle.end(), '|', '_');
+    return handle;
+}
+
+std::string formatProfileCommand(const std::string& firstName, const std::string& lastName, const std::string& handle) {
+    auto clean = [](std::string value) {
+        std::replace(value.begin(), value.end(), '|', '_');
+        std::replace(value.begin(), value.end(), '\x1f', '_');
+        return value;
+    };
+    return "/profile " + clean(firstName) + "\x1f" + clean(lastName) + "\x1f" + clean(usernameFromHandle(handle));
+}
+
 ContactItem contactFromUsername(const std::string& rawUsername) {
     std::string username = rawUsername.empty() ? "user" : rawUsername;
     std::replace(username.begin(), username.end(), '|', '_');
@@ -77,6 +93,25 @@ ContactItem contactFromUsername(const std::string& rawUsername) {
     contact.lastName = space == std::string::npos ? "Online" : display.substr(space + 1);
     if (contact.firstName.empty()) contact.firstName = "User";
     if (contact.lastName.empty()) contact.lastName = "Online";
+    return contact;
+}
+
+ContactItem contactFromServerEntry(const std::string& entry) {
+    std::array<std::string, 3> parts;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const std::size_t sep = entry.find('\x1f', start);
+        parts[i] = entry.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+        if (sep == std::string::npos) break;
+        start = sep + 1;
+    }
+
+    if (parts[1].empty() && parts[2].empty()) return contactFromUsername(entry);
+
+    ContactItem contact;
+    contact.firstName = parts[0].empty() ? "User" : parts[0];
+    contact.lastName = parts[1].empty() ? "Online" : parts[1];
+    contact.username = parts[2].empty() ? "@user" : (parts[2].front() == '@' ? parts[2] : "@" + parts[2]);
     return contact;
 }
 
@@ -222,7 +257,7 @@ private:
                         while (start <= users.size()) {
                             const std::size_t sep = users.find('|', start);
                             std::string name = users.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
-                            if (!name.empty()) contacts_.push_back(contactFromUsername(name));
+                            if (!name.empty()) contacts_.push_back(contactFromServerEntry(name));
                             if (sep == std::string::npos) break;
                             start = sep + 1;
                         }
@@ -497,7 +532,7 @@ int main(int argc, char** argv) {
         "Language", "Saved messages"};
 
     TcpClient client;
-    bool connected = client.connectTo(serverIp, serverPort, "sfml_user");
+    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
 
     std::vector<std::string> serverLog;
     bool reconnecting = false;
@@ -508,7 +543,7 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
-    if (connected) client.requestContacts();
+    if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
 
     while (window.isOpen()) {
         const auto size = window.getSize();
@@ -586,7 +621,7 @@ int main(int argc, char** argv) {
                         const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
                         if (!insideCard) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
                         if (cancelRect.contains({mx,my})) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
-                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
+                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
                         editFirstActive = firstRect.contains({mx,my});
                         editLastActive = lastRect.contains({mx,my});
                     }
@@ -717,8 +752,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -752,8 +787,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -787,8 +822,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort] {
-                                return client.connectTo(serverIp, serverPort, "sfml_user");
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -843,7 +878,7 @@ int main(int argc, char** argv) {
             connected = reconnectTask.get();
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
-            if (connected) client.requestContacts();
+            if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
         }
 
 
@@ -935,17 +970,17 @@ int main(int argc, char** argv) {
             profileAvatar.setPosition({avatarCx - avatarRadius, avatarCy - avatarRadius});
             window.draw(profileAvatar);
 
-            sf::Text profileName(font, "Username", fontSize(20, uiScale));
+            sf::Text profileName(font, profileFirstName + " " + profileLastName, fontSize(20, uiScale));
             profileName.setFillColor(sf::Color(220, 235, 247));
             const auto profileBounds = profileName.getLocalBounds();
             profileName.setPosition({avatarCx - profileBounds.size.x * 0.5f, avatarCy + avatarRadius + 18.f * uiScale});
             window.draw(profileName);
 
-            sf::Text profileHandle(font, "@username", fontSize(15, uiScale));
-            profileHandle.setFillColor(sf::Color(148, 178, 205));
-            const auto handleBounds = profileHandle.getLocalBounds();
-            profileHandle.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
-            window.draw(profileHandle);
+            sf::Text profileHandleText(font, profileHandle, fontSize(15, uiScale));
+            profileHandleText.setFillColor(sf::Color(148, 178, 205));
+            const auto handleBounds = profileHandleText.getLocalBounds();
+            profileHandleText.setPosition({avatarCx - handleBounds.size.x * 0.5f, avatarCy + avatarRadius + 50.f * uiScale});
+            window.draw(profileHandleText);
 
             const float itemsStartY = avatarCy + avatarRadius + 96.f * uiScale;
             const float itemH = 34.f * uiScale;
@@ -1145,12 +1180,12 @@ int main(int argc, char** argv) {
             avatar.setPosition({cardX + 20.f * uiScale, topBlockY + 18.f * uiScale});
             window.draw(avatar);
 
-            sf::Text name(font, "Username", fontSize(20, uiScale));
+            sf::Text name(font, profileFirstName + " " + profileLastName, fontSize(20, uiScale));
             name.setFillColor(sf::Color(231, 240, 249));
             name.setPosition({cardX + 102.f * uiScale, topBlockY + 26.f * uiScale});
             window.draw(name);
 
-            sf::Text handle(font, "@username", fontSize(15, uiScale));
+            sf::Text handle(font, profileHandle, fontSize(15, uiScale));
             handle.setFillColor(sf::Color(134, 171, 202));
             handle.setPosition({cardX + 102.f * uiScale, topBlockY + 58.f * uiScale});
             window.draw(handle);
