@@ -401,7 +401,10 @@ public:
         PendingOutgoing item{makeDeviceId(), usernameFromHandle(recipient), body};
         auto queue = loadOutbox();
         queue.push_back(item);
-        saveOutbox(queue);
+        if (!saveOutbox(queue)) {
+            lastError_ = "Cannot persist the local message queue";
+            return false;
+        }
         flushOutbox();
         return true; // queued locally; server delivery is retried on the next sync
     }
@@ -508,10 +511,12 @@ private:
         }
         return items;
     }
-    void saveOutbox(const std::vector<PendingOutgoing>& items) const {
+    bool saveOutbox(const std::vector<PendingOutgoing>& items) const {
         std::ofstream out(".messenger_outbox", std::ios::trunc);
+        if (!out) return false;
         for (const auto& item : items)
             out << item.id << '\t' << hexEncode(item.recipient) << '\t' << hexEncode(item.body) << "\n";
+        return static_cast<bool>(out);
     }
 
     bool exchange(const std::string& request, std::string& response) {
