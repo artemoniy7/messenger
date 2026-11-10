@@ -784,6 +784,12 @@ int main(int argc, char** argv) {
 
     ChatStorage storage("chat_history.txt");
     std::vector<ChatItem> chats = storage.load();
+    std::set<int> receivedMessageIds;
+    {
+        std::ifstream idsFile(".messenger_received_ids");
+        int id = 0;
+        while (idsFile >> id) receivedMessageIds.insert(id);
+    }
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
     float settingsAnim = 0.f;
@@ -1254,6 +1260,8 @@ int main(int argc, char** argv) {
             const auto incoming = client.syncMessages();
             std::vector<int> acknowledged;
             for (const auto& message : incoming) {
+                acknowledged.push_back(message.id);
+                if (!receivedMessageIds.insert(message.id).second) continue;
                 const std::string title = "@" + message.sender;
                 auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
                     return toLowerAscii(chat.title) == toLowerAscii(title);
@@ -1263,12 +1271,13 @@ int main(int argc, char** argv) {
                     it = std::prev(chats.end());
                 }
                 it->messages.push_back(message.sender + ": " + message.body);
-                acknowledged.push_back(message.id);
                 addLog("[MESSAGE] From @" + message.sender);
             }
             if (!acknowledged.empty()) {
                 storage.save(chats);
-                if (!client.acknowledge(acknowledged))
+                std::ofstream idsFile(".messenger_received_ids", std::ios::trunc);
+                for (int id : receivedMessageIds) idsFile << id << "\n";
+                if (idsFile && !client.acknowledge(acknowledged))
                     addLog("[CLIENT] Message ACK will be retried after reconnect");
             }
             lastSync = std::chrono::steady_clock::now();
