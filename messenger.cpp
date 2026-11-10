@@ -471,6 +471,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return contacts_;
     }
+    std::string accountUsername() const { return username_; }
     bool isConnected() const { return connected_.load(); }
     std::string lastError() const { return lastError_; }
 
@@ -838,9 +839,19 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
+    auto refreshOwnProfile = [&] {
+        profileHandle = "@" + client.accountUsername();
+        for (const auto& person : client.contacts()) {
+            if (toLowerAscii(person.username) == toLowerAscii(profileHandle)) {
+                profileFirstName = person.firstName;
+                profileLastName = person.lastName;
+                break;
+            }
+        }
+    };
     if (connected) {
-        client.updateProfile(profileFirstName + " " + profileLastName);
         client.requestContacts();
+        refreshOwnProfile();
     }
 
     while (window.isOpen()) {
@@ -1231,8 +1242,8 @@ int main(int argc, char** argv) {
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
             if (connected) {
-                client.updateProfile(profileFirstName + " " + profileLastName);
                 client.requestContacts();
+                refreshOwnProfile();
             }
         }
 
