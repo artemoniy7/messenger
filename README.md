@@ -45,6 +45,18 @@ python client_v2.py --host 192.168.1.10 profile "Alice Example"
 
 For a TLS server signed by a private CA, add `--ca-file path/to/ca.pem` before the subcommand. Do not disable certificate verification on untrusted networks.
 
+## Build the SFML desktop client
+
+The desktop application uses **SFML 3** and CMake 3.20+.
+
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+If SFML 3 is installed in a non-standard location, pass its prefix with
+`-DCMAKE_PREFIX_PATH=/path/to/SFML`.
+
 ## SFML desktop client (v2)
 
 The SFML application reads first-device enrollment settings from environment variables:
@@ -59,7 +71,7 @@ Example (Linux/macOS):
 export MESSENGER_USERNAME=alice
 export MESSENGER_DISPLAY_NAME="Alice Example"
 export MESSENGER_PAIRING_CODE="choose-a-long-local-code"
-./messenger 192.168.1.10 5000
+./build/messenger 192.168.1.10 5000
 ```
 
 On Windows PowerShell:
@@ -68,17 +80,21 @@ On Windows PowerShell:
 $env:MESSENGER_USERNAME = "alice"
 $env:MESSENGER_DISPLAY_NAME = "Alice Example"
 $env:MESSENGER_PAIRING_CODE = "choose-a-long-local-code"
-.\\messenger.exe 192.168.1.10 5000
+.\\build\\Release\\messenger.exe 192.168.1.10 5000
 ```
 
 The first successful pairing stores the device ID and device token in
-`.messenger_device` in the application's working directory. Protect this file like
-a password; do not commit or share it. Later launches reuse the stored device token.
+`.messenger_device` in the application's working directory. Protect this file like a password; do not commit or share it. The
+`.messenger_outbox` file may contain message text that has not yet reached the server,
+and `.messenger_received_ids` tracks already-saved server messages to prevent duplicates
+when an ACK must be retried; keep these files private as well. Later launches reuse the stored device token.
 If no server IP is supplied, the client broadcasts the v2 discovery request on the LAN.
 
 Open **Settings → Contacts**, select a user, then type in the message field and press
-Enter. Incoming direct messages are synchronized periodically and saved to
-`chat_history.txt` before the client acknowledges them to the server.
+Enter. Outgoing messages are written to the local `.messenger_outbox` queue and retried
+with the same client message ID until the server accepts them. Incoming direct messages
+are synchronized periodically and saved to `chat_history.txt` before the client
+acknowledges them to the server.
 
 The current native client uses plaintext TCP unless a future TLS transport is added.
 Use it only on a trusted LAN; the Python reference client already supports verified

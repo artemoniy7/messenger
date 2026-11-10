@@ -1,0 +1,27 @@
+name: SFML desktop build
+
+on:
+  push:
+    branches:
+      - main
+      - feat/lan-messenger-core
+  pull_request:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install vcpkg
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+      - name: Install SFML 3
+        shell: pwsh
+        run: .\vcpkg\vcpkg.exe install sfml:x64-windows
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$PWD/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      - name: Build desktop client
+        run: cmake --build build --config Release

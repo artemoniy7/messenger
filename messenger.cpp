@@ -18,6 +18,7 @@
 #include <future>
 #include <cctype>
 #include <cstdlib>
+#include <iterator>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -144,12 +145,14 @@ public:
         return chats;
     }
 
-    void save(const std::vector<ChatItem>& chats) {
+    bool save(const std::vector<ChatItem>& chats) {
         std::ofstream out(filename_, std::ios::trunc);
+        if (!out) return false;
         for (const auto& chat : chats) {
             out << "CHAT:" << chat.title << "\n";
             for (const auto& msg : chat.messages) out << "MSG:" << msg << "\n";
         }
+        return static_cast<bool>(out);
     }
 
 private:
@@ -294,6 +297,11 @@ std::string makeDeviceId() {
 }
 
 class TcpClient {
+    struct PendingOutgoing {
+        std::string id;
+        std::string recipient;
+        std::string body;
+    };
 public:
     TcpClient() { initSockets(); }
     ~TcpClient() { disconnect(); cleanupSockets(); }
@@ -393,17 +401,43 @@ public:
 
     bool sendMessage(const std::string& recipient, const std::string& body) {
         if (recipient.empty() || body.empty()) return false;
-        const std::string id = makeDeviceId();
-        std::string response;
-        const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
-            jsonEscape(usernameFromHandle(recipient)) + "\",\"body\":\"" + jsonEscape(body) +
-            "\",\"client_message_id\":\"" + id + "\"}";
-        if (!exchange(request, response)) return false;
-        if (jsonString(response, "type") != "message.accepted") {
-            lastError_ = jsonString(response, "code");
+        PendingOutgoing item{makeDeviceId(), usernameFromHandle(recipient), body};
+        auto queue = loadOutbox();
+        queue.push_back(item);
+        if (!saveOutbox(queue)) {
+            lastError_ = "Cannot persist the local message queue";
             return false;
         }
-        return true;
+        flushOutbox();
+        return true; // queued locally; server delivery is retried on the next sync
+    }
+
+    std::size_t flushOutbox() {
+        if (!connected_.load()) return 0;
+        auto queue = loadOutbox();
+        std::vector<PendingOutgoing> remaining;
+        std::size_t accepted = 0;
+        for (const auto& item : queue) {
+            std::string response;
+            const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
+                jsonEscape(item.recipient) + "\",\"body\":\"" + jsonEscape(item.body) +
+                "\",\"client_message_id\":\"" + jsonEscape(item.id) + "\"}";
+            if (exchange(request, response) && jsonString(response, "type") == "message.accepted") {
+                ++accepted;
+            } else {
+                remaining.push_back(item);
+                if (!connected_.load()) {
+                    for (const auto& later : queue) {
+                        if (later.id == item.id) continue;
+                        if (std::none_of(remaining.begin(), remaining.end(), [&](const PendingOutgoing& x) { return x.id == later.id; }))
+                            remaining.push_back(later);
+                    }
+                    break;
+                }
+            }
+        }
+        saveOutbox(remaining);
+        return accepted;
     }
 
     std::vector<ReceivedMessage> syncMessages() {
@@ -439,10 +473,56 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return contacts_;
     }
+    std::string accountUsername() const { return username_; }
     bool isConnected() const { return connected_.load(); }
     std::string lastError() const { return lastError_; }
 
 private:
+    static std::string hexEncode(const std::string& value) {
+        static const char digits[] = "0123456789abcdef";
+        std::string out;
+        out.reserve(value.size() * 2);
+        for (unsigned char c : value) { out += digits[c >> 4]; out += digits[c & 15]; }
+        return out;
+    }
+    static std::string hexDecode(const std::string& value) {
+        auto digit = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        std::string out;
+        if (value.size() % 2) return out;
+        for (std::size_t i = 0; i < value.size(); i += 2) {
+            int hi = digit(value[i]), lo = digit(value[i + 1]);
+            if (hi < 0 || lo < 0) return {};
+            out.push_back(static_cast<char>((hi << 4) | lo));
+        }
+        return out;
+    }
+    std::vector<PendingOutgoing> loadOutbox() const {
+        std::vector<PendingOutgoing> items;
+        std::ifstream in(".messenger_outbox");
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto a = line.find('\t');
+            const auto b = a == std::string::npos ? a : line.find('\t', a + 1);
+            if (a == std::string::npos || b == std::string::npos) continue;
+            PendingOutgoing item{line.substr(0, a), hexDecode(line.substr(a + 1, b - a - 1)),
+                                 hexDecode(line.substr(b + 1))};
+            if (!item.id.empty() && !item.recipient.empty() && !item.body.empty()) items.push_back(std::move(item));
+        }
+        return items;
+    }
+    bool saveOutbox(const std::vector<PendingOutgoing>& items) const {
+        std::ofstream out(".messenger_outbox", std::ios::trunc);
+        if (!out) return false;
+        for (const auto& item : items)
+            out << item.id << '\t' << hexEncode(item.recipient) << '\t' << hexEncode(item.body) << "\n";
+        return static_cast<bool>(out);
+    }
+
     bool exchange(const std::string& request, std::string& response) {
         if (sock_ == kInvalidSocket || !connected_.load()) return false;
         const std::string frame = request + "\n";
@@ -706,6 +786,12 @@ int main(int argc, char** argv) {
 
     ChatStorage storage("chat_history.txt");
     std::vector<ChatItem> chats = storage.load();
+    std::set<int> receivedMessageIds;
+    {
+        std::ifstream idsFile(".messenger_received_ids");
+        int id = 0;
+        while (idsFile >> id) receivedMessageIds.insert(id);
+    }
     std::size_t selectedChat = 0;
     bool settingsOpen = false;
     float settingsAnim = 0.f;
@@ -718,8 +804,11 @@ int main(int argc, char** argv) {
     const char* envUsername = std::getenv("MESSENGER_USERNAME");
     const char* envDisplayName = std::getenv("MESSENGER_DISPLAY_NAME");
     const char* envPairingCode = std::getenv("MESSENGER_PAIRING_CODE");
-    std::string profileFirstName = envDisplayName ? envDisplayName : "New";
-    std::string profileLastName = "User";
+    const std::string initialDisplayName = envDisplayName ? envDisplayName : "New User";
+    const auto initialNameSplit = initialDisplayName.find(' ');
+    std::string profileFirstName = initialDisplayName.substr(0, initialNameSplit);
+    std::string profileLastName = initialNameSplit == std::string::npos
+        ? "User" : initialDisplayName.substr(initialNameSplit + 1);
     std::string profilePhone = "+7 910 000 0000";
     std::string profileHandle = envUsername ? std::string("@") + envUsername : "@username";
     const std::string pairingCode = envPairingCode ? envPairingCode : "";
@@ -758,9 +847,19 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
+    auto refreshOwnProfile = [&] {
+        profileHandle = "@" + client.accountUsername();
+        for (const auto& person : client.contacts()) {
+            if (toLowerAscii(person.username) == toLowerAscii(profileHandle)) {
+                profileFirstName = person.firstName;
+                profileLastName = person.lastName;
+                break;
+            }
+        }
+    };
     if (connected) {
-        client.updateProfile(profileFirstName + " " + profileLastName);
         client.requestContacts();
+        refreshOwnProfile();
     }
 
     while (window.isOpen()) {
@@ -1151,17 +1250,20 @@ int main(int argc, char** argv) {
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
             if (connected) {
-                client.updateProfile(profileFirstName + " " + profileLastName);
                 client.requestContacts();
+                refreshOwnProfile();
             }
         }
 
 
         static auto lastSync = std::chrono::steady_clock::now() - std::chrono::seconds(3);
         if (connected && !reconnecting && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
+            client.flushOutbox();
             const auto incoming = client.syncMessages();
             std::vector<int> acknowledged;
             for (const auto& message : incoming) {
+                acknowledged.push_back(message.id);
+                if (!receivedMessageIds.insert(message.id).second) continue;
                 const std::string title = "@" + message.sender;
                 auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
                     return toLowerAscii(chat.title) == toLowerAscii(title);
@@ -1171,13 +1273,21 @@ int main(int argc, char** argv) {
                     it = std::prev(chats.end());
                 }
                 it->messages.push_back(message.sender + ": " + message.body);
-                acknowledged.push_back(message.id);
                 addLog("[MESSAGE] From @" + message.sender);
             }
             if (!acknowledged.empty()) {
-                storage.save(chats);
-                if (!client.acknowledge(acknowledged))
-                    addLog("[CLIENT] Message ACK will be retried after reconnect");
+                if (storage.save(chats)) {
+                    std::ofstream idsFile(".messenger_received_ids", std::ios::trunc);
+                    for (int id : receivedMessageIds) idsFile << id << "\n";
+                    if (idsFile) {
+                        if (!client.acknowledge(acknowledged))
+                            addLog("[CLIENT] Message ACK will be retried after reconnect");
+                    } else {
+                        addLog("[CLIENT] Could not persist inbox deduplication state; ACK skipped");
+                    }
+                } else {
+                    addLog("[CLIENT] Could not save chat history; ACK skipped");
+                }
             }
             lastSync = std::chrono::steady_clock::now();
         }

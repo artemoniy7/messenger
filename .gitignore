@@ -1,0 +1,10 @@
+# Local account credentials and unsent messages
+.messenger_device
+.messenger_outbox
+.messenger_received_ids
+
+# Runtime databases and Python artifacts
+data/
+*.sqlite3
+__pycache__/
+*.py[cod]
