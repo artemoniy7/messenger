@@ -17,6 +17,7 @@
 #include <set>
 #include <future>
 #include <cctype>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -155,42 +156,168 @@ private:
     std::string filename_;
 };
 
+struct ReceivedMessage {
+    int id = 0;
+    std::string sender;
+    std::string body;
+    std::string createdAt;
+};
+
+std::string jsonEscape(const std::string& value) {
+    std::string out;
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    const char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0xf];
+                    out += hex[c & 0xf];
+                } else out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+std::string jsonString(const std::string& object, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = object.find(needle);
+    if (p == std::string::npos) return {};
+    p = object.find(':', p + needle.size());
+    if (p == std::string::npos) return {};
+    p = object.find('"', p + 1);
+    if (p == std::string::npos) return {};
+    ++p;
+    std::string out;
+    bool escaped = false;
+    for (; p < object.size(); ++p) {
+        char c = object[p];
+        if (escaped) {
+            switch (c) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                default: out += c; break;
+            }
+            escaped = false;
+        } else if (c == '\\') escaped = true;
+        else if (c == '"') break;
+        else out += c;
+    }
+    return out;
+}
+
+int jsonInt(const std::string& object, const std::string& key, int fallback = 0) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = object.find(needle);
+    if (p == std::string::npos) return fallback;
+    p = object.find(':', p + needle.size());
+    if (p == std::string::npos) return fallback;
+    ++p;
+    while (p < object.size() && std::isspace(static_cast<unsigned char>(object[p]))) ++p;
+    try { return std::stoi(object.substr(p)); } catch (...) { return fallback; }
+}
+
+std::vector<std::string> jsonObjects(const std::string& source, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = source.find(needle);
+    if (p == std::string::npos) return {};
+    p = source.find('[', p + needle.size());
+    if (p == std::string::npos) return {};
+    std::vector<std::string> result;
+    bool quoted = false, escaped = false;
+    int depth = 0;
+    std::size_t begin = std::string::npos;
+    for (; p < source.size(); ++p) {
+        const char c = source[p];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+            continue;
+        }
+        if (c == '"') { quoted = true; continue; }
+        if (c == '{') {
+            if (depth++ == 0) begin = p;
+        } else if (c == '}' && depth > 0) {
+            if (--depth == 0 && begin != std::string::npos)
+                result.push_back(source.substr(begin, p - begin + 1));
+        } else if (c == ']' && depth == 0) break;
+    }
+    return result;
+}
+
+std::string makeDeviceId() {
+    static const char* hex = "0123456789abcdef";
+    std::string value;
+    for (int i = 0; i < 32; ++i) value += hex[std::rand() % 16];
+    value.insert(8, "-"); value.insert(13, "-"); value.insert(18, "-"); value.insert(23, "-");
+    return value;
+}
+
 class TcpClient {
 public:
     TcpClient() { initSockets(); }
     ~TcpClient() { disconnect(); cleanupSockets(); }
 
-    bool connectTo(std::string_view host, int port, std::string_view username) {
+    bool connectTo(std::string_view host, int port, std::string_view username,
+                   std::string_view displayName, std::string_view pairingCode) {
         disconnect();
         sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock_ == kInvalidSocket) {
-            lastError_ = "socket() failed";
-            return false;
-        }
-
+        if (sock_ == kInvalidSocket) { lastError_ = "socket() failed"; return false; }
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port));
         if (::inet_pton(AF_INET, std::string(host).c_str(), &addr.sin_addr) <= 0) {
-            lastError_ = "Invalid server IP";
-            disconnect();
-            return false;
+            lastError_ = "Invalid server IP"; disconnect(); return false;
         }
-
         if (::connect(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            lastError_ = std::string("connect() failed: ") + std::strerror(errno);
-            disconnect();
-            return false;
+            lastError_ = "Connection failed"; disconnect(); return false;
         }
-
         connected_.store(true);
-        if (!sendLine(std::string(username))) {
-            lastError_ = "Failed to send username";
-            disconnect();
-            return false;
+#ifdef _WIN32
+        DWORD timeout = 2500;
+        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+        setsockopt(sock_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+        timeval timeout{2, 500000};
+        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(sock_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+        loadCredentials();
+        std::string hello = "{\"action\":\"hello\",\"version\":2,\"device_id\":\"" + jsonEscape(deviceId_) + "\"";
+        if (!deviceToken_.empty()) {
+            hello += ",\"device_token\":\"" + jsonEscape(deviceToken_) + "\"";
+        } else {
+            if (username.empty() || displayName.empty() || pairingCode.empty()) {
+                lastError_ = "First run: set MESSENGER_PAIRING_CODE and MESSENGER_USERNAME";
+                disconnect(); return false;
+            }
+            username_ = std::string(username);
+            hello += ",\"username\":\"" + jsonEscape(username_) + "\",\"display_name\":\"" +
+                     jsonEscape(std::string(displayName)) + "\",\"pairing_code\":\"" +
+                     jsonEscape(std::string(pairingCode)) + "\"";
         }
-
-        receiver_ = std::thread([this] { recvLoop(); });
+        hello += "}";
+        std::string response;
+        if (!exchange(hello, response) || jsonString(response, "type") != "welcome") {
+            const std::string code = jsonString(response, "code");
+            lastError_ = code.empty() ? "V2 handshake failed" : code;
+            disconnect(); return false;
+        }
+        const std::string issued = jsonString(response, "device_token");
+        if (!issued.empty()) deviceToken_ = issued;
+        if (username_.empty()) username_ = std::string(username);
+        saveCredentials();
         return true;
     }
 
@@ -198,85 +325,137 @@ public:
         connected_.store(false);
         if (sock_ != kInvalidSocket) {
 #ifdef _WIN32
-            ::shutdown(sock_, SD_BOTH);
-            ::closesocket(sock_);
+            ::shutdown(sock_, SD_BOTH); ::closesocket(sock_);
 #else
-            ::shutdown(sock_, SHUT_RDWR);
-            ::close(sock_);
+            ::shutdown(sock_, SHUT_RDWR); ::close(sock_);
 #endif
             sock_ = kInvalidSocket;
         }
-        if (receiver_.joinable()) receiver_.join();
     }
 
-    bool sendLine(const std::string& line) {
-        if (sock_ == kInvalidSocket) return false;
-        std::string data = line + "\n";
-        return ::send(sock_, data.c_str(), static_cast<int>(data.size()), 0) >= 0;
-    }
-
-    void requestContacts() { sendLine("/users"); }
-
-    std::vector<std::string> consumeMessages() {
+    bool requestContacts() {
+        std::string response;
+        if (!exchange("{\"action\":\"users.list\"}", response)) return false;
+        if (jsonString(response, "type") != "users.list") return false;
+        std::vector<ContactItem> parsed;
+        for (const auto& item : jsonObjects(response, "users")) {
+            const std::string username = jsonString(item, "username");
+            const std::string display = jsonString(item, "display_name");
+            if (username.empty()) continue;
+            ContactItem contact = contactFromUsername(username);
+            if (!display.empty()) {
+                const auto split = display.find(' ');
+                contact.firstName = display.substr(0, split);
+                contact.lastName = split == std::string::npos ? "" : display.substr(split + 1);
+            }
+            parsed.push_back(contact);
+        }
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<std::string> out;
-        out.swap(messages_);
-        return out;
+        contacts_ = std::move(parsed);
+        return true;
+    }
+
+    bool updateProfile(const std::string& displayName) {
+        std::string response;
+        return exchange("{\"action\":\"profile.update\",\"display_name\":\"" +
+                        jsonEscape(displayName) + "\"}", response) &&
+               jsonString(response, "type") == "profile.updated";
+    }
+
+    bool sendMessage(const std::string& recipient, const std::string& body) {
+        if (recipient.empty() || body.empty()) return false;
+        const std::string id = makeDeviceId();
+        std::string response;
+        const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
+            jsonEscape(usernameFromHandle(recipient)) + "\",\"body\":\"" + jsonEscape(body) +
+            "\",\"client_message_id\":\"" + id + "\"}";
+        if (!exchange(request, response)) return false;
+        if (jsonString(response, "type") != "message.accepted") {
+            lastError_ = jsonString(response, "code");
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<ReceivedMessage> syncMessages() {
+        std::string response;
+        if (!exchange("{\"action\":\"messages.sync\",\"limit\":100}", response) ||
+            jsonString(response, "type") != "messages.sync") return {};
+        std::vector<ReceivedMessage> result;
+        for (const auto& item : jsonObjects(response, "messages")) {
+            ReceivedMessage message;
+            message.id = jsonInt(item, "id");
+            message.sender = jsonString(item, "sender");
+            message.body = jsonString(item, "body");
+            message.createdAt = jsonString(item, "created_at");
+            if (message.id > 0) result.push_back(std::move(message));
+        }
+        return result;
+    }
+
+    bool acknowledge(const std::vector<int>& ids) {
+        if (ids.empty()) return true;
+        std::string list = "[";
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            if (i) list += ",";
+            list += std::to_string(ids[i]);
+        }
+        list += "]";
+        std::string response;
+        return exchange("{\"action\":\"messages.ack\",\"message_ids\":" + list + "}", response) &&
+               jsonString(response, "type") == "messages.acknowledged";
     }
 
     std::vector<ContactItem> contacts() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return contacts_;
     }
-
     bool isConnected() const { return connected_.load(); }
     std::string lastError() const { return lastError_; }
 
 private:
-    void recvLoop() {
-        std::string buffer;
-        char chunk[1024];
-        while (connected_.load()) {
-            int n = static_cast<int>(::recv(sock_, chunk, sizeof(chunk), 0));
-            if (n <= 0) {
-                connected_.store(false);
-                break;
-            }
-
-            buffer.append(chunk, chunk + n);
-            std::size_t pos = 0;
-            while ((pos = buffer.find('\n')) != std::string::npos) {
-                std::string line = buffer.substr(0, pos);
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (line.rfind("USERS ", 0) == 0) {
-                        contacts_.clear();
-                        std::string users = line.substr(6);
-                        std::size_t start = 0;
-                        while (start <= users.size()) {
-                            const std::size_t sep = users.find('|', start);
-                            std::string name = users.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
-                            if (!name.empty()) contacts_.push_back(contactFromServerEntry(name));
-                            if (sep == std::string::npos) break;
-                            start = sep + 1;
-                        }
-                    } else {
-                        messages_.push_back(line);
-                    }
-                }
-                buffer.erase(0, pos + 1);
-            }
+    bool exchange(const std::string& request, std::string& response) {
+        if (sock_ == kInvalidSocket || !connected_.load()) return false;
+        const std::string frame = request + "\n";
+        std::size_t sent = 0;
+        while (sent < frame.size()) {
+            const int n = static_cast<int>(::send(sock_, frame.data() + sent,
+                                                  static_cast<int>(frame.size() - sent), 0));
+            if (n <= 0) { connected_.store(false); lastError_ = "Send failed"; return false; }
+            sent += static_cast<std::size_t>(n);
         }
+        response.clear();
+        char c = 0;
+        while (response.size() <= 64 * 1024) {
+            const int n = static_cast<int>(::recv(sock_, &c, 1, 0));
+            if (n <= 0) { connected_.store(false); lastError_ = "Server response timeout or disconnect"; return false; }
+            if (c == '\n') return true;
+            if (c != '\r') response += c;
+        }
+        connected_.store(false);
+        lastError_ = "Server frame too large";
+        return false;
+    }
+
+    void loadCredentials() {
+        std::ifstream in(".messenger_device");
+        if (in) {
+            std::getline(in, deviceId_);
+            std::getline(in, deviceToken_);
+            std::getline(in, username_);
+        }
+        if (deviceId_.empty()) deviceId_ = makeDeviceId();
+    }
+    void saveCredentials() {
+        std::ofstream out(".messenger_device", std::ios::trunc);
+        if (out) out << deviceId_ << "\n" << deviceToken_ << "\n" << username_ << "\n";
     }
 
     static void initSockets() {
 #ifdef _WIN32
-        WSADATA data{};
-        WSAStartup(MAKEWORD(2, 2), &data);
+        WSADATA data{}; WSAStartup(MAKEWORD(2, 2), &data);
 #endif
     }
-
     static void cleanupSockets() {
 #ifdef _WIN32
         WSACleanup();
@@ -285,12 +464,12 @@ private:
 
     SocketHandle sock_ = kInvalidSocket;
     std::atomic<bool> connected_{false};
-    std::thread receiver_;
     mutable std::mutex mutex_;
-    std::vector<std::string> messages_;
     std::vector<ContactItem> contacts_;
     std::string lastError_;
+    std::string deviceId_, deviceToken_, username_;
 };
+
 
 float clampf(float v, float a, float b) { return std::max(a, std::min(v, b)); }
 
