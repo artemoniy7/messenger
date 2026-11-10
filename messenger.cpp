@@ -1004,8 +1004,9 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -1039,8 +1040,9 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
