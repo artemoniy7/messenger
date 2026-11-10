@@ -163,6 +163,30 @@ struct ReceivedMessage {
     std::string createdAt;
 };
 
+void appendUtf8(std::string& out, char32_t cp) {
+    if (cp <= 0x7f) out.push_back(static_cast<char>(cp));
+    else if (cp <= 0x7ff) {
+        out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else if (cp <= 0xffff) {
+        out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else if (cp <= 0x10ffff) {
+        out.push_back(static_cast<char>(0xf0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    }
+}
+
+void eraseLastUtf8(std::string& value) {
+    if (value.empty()) return;
+    value.pop_back();
+    while (!value.empty() &&
+           (static_cast<unsigned char>(value.back()) & 0xc0) == 0x80) value.pop_back();
+}
+
 std::string jsonEscape(const std::string& value) {
     std::string out;
     for (unsigned char c : value) {
@@ -753,7 +777,7 @@ int main(int argc, char** argv) {
                 if (messageInputActive && !editFirstActive && !editLastActive &&
                     !contactsSearchActive && !serverIpInputActive && !serverPortInputActive) {
                     const char32_t code = textEntered->unicode;
-                    if (code == 8) { if (!messageDraft.empty()) messageDraft.pop_back(); }
+                    if (code == 8) { eraseLastUtf8(messageDraft); }
                     else if (code == 13 || code == 10) {
                         if (connected && selectedChat < chats.size() && !messageDraft.empty()) {
                             if (client.sendMessage(chats[selectedChat].title, messageDraft)) {
@@ -762,8 +786,8 @@ int main(int argc, char** argv) {
                                 messageDraft.clear();
                             } else addLog("[CLIENT] Send failed: " + client.lastError());
                         }
-                    } else if (code >= 32 && code < 127 && messageDraft.size() < 2000) {
-                        messageDraft.push_back(static_cast<char>(code));
+                    } else if (code >= 32 && code != 127 && messageDraft.size() < 8000) {
+                        appendUtf8(messageDraft, code);
                     }
                 }
                 if (editFirstActive || editLastActive) {
