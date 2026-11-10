@@ -283,6 +283,11 @@ std::vector<std::string> jsonObjects(const std::string& source, const std::strin
 std::string makeDeviceId() {
     static const char* hex = "0123456789abcdef";
     std::string value;
+    static const bool seeded = [] {
+        std::srand(static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count()));
+        return true;
+    }();
+    (void)seeded;
     for (int i = 0; i < 32; ++i) value += hex[std::rand() % 16];
     value.insert(8, "-"); value.insert(13, "-"); value.insert(18, "-"); value.insert(23, "-");
     return value;
@@ -1153,7 +1158,7 @@ int main(int argc, char** argv) {
 
 
         static auto lastSync = std::chrono::steady_clock::now() - std::chrono::seconds(3);
-        if (connected && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
+        if (connected && !reconnecting && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
             const auto incoming = client.syncMessages();
             std::vector<int> acknowledged;
             for (const auto& message : incoming) {
