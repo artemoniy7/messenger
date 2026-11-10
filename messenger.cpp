@@ -145,12 +145,14 @@ public:
         return chats;
     }
 
-    void save(const std::vector<ChatItem>& chats) {
+    bool save(const std::vector<ChatItem>& chats) {
         std::ofstream out(filename_, std::ios::trunc);
+        if (!out) return false;
         for (const auto& chat : chats) {
             out << "CHAT:" << chat.title << "\n";
             for (const auto& msg : chat.messages) out << "MSG:" << msg << "\n";
         }
+        return static_cast<bool>(out);
     }
 
 private:
@@ -1274,11 +1276,18 @@ int main(int argc, char** argv) {
                 addLog("[MESSAGE] From @" + message.sender);
             }
             if (!acknowledged.empty()) {
-                storage.save(chats);
-                std::ofstream idsFile(".messenger_received_ids", std::ios::trunc);
-                for (int id : receivedMessageIds) idsFile << id << "\n";
-                if (idsFile && !client.acknowledge(acknowledged))
-                    addLog("[CLIENT] Message ACK will be retried after reconnect");
+                if (storage.save(chats)) {
+                    std::ofstream idsFile(".messenger_received_ids", std::ios::trunc);
+                    for (int id : receivedMessageIds) idsFile << id << "\n";
+                    if (idsFile) {
+                        if (!client.acknowledge(acknowledged))
+                            addLog("[CLIENT] Message ACK will be retried after reconnect");
+                    } else {
+                        addLog("[CLIENT] Could not persist inbox deduplication state; ACK skipped");
+                    }
+                } else {
+                    addLog("[CLIENT] Could not save chat history; ACK skipped");
+                }
             }
             lastSync = std::chrono::steady_clock::now();
         }
