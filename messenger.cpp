@@ -686,10 +686,14 @@ int main(int argc, char** argv) {
     std::string contactsSearch;
     bool profileOpen = false;
     float profileAnim = 0.f;
-    std::string profileFirstName = "Username";
+    const char* envUsername = std::getenv("MESSENGER_USERNAME");
+    const char* envDisplayName = std::getenv("MESSENGER_DISPLAY_NAME");
+    const char* envPairingCode = std::getenv("MESSENGER_PAIRING_CODE");
+    std::string profileFirstName = envDisplayName ? envDisplayName : "New";
     std::string profileLastName = "User";
     std::string profilePhone = "+7 910 000 0000";
-    std::string profileHandle = "@username";
+    std::string profileHandle = envUsername ? std::string("@") + envUsername : "@username";
+    const std::string pairingCode = envPairingCode ? envPairingCode : "";
     std::string profileBio = "I like coding and music";
     bool editProfileOpen = false;
     float editProfileAnim = 0.f;
@@ -711,7 +715,8 @@ int main(int argc, char** argv) {
         "Language", "Saved messages"};
 
     TcpClient client;
-    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                      profileFirstName + " " + profileLastName, pairingCode);
 
     std::vector<std::string> serverLog;
     bool reconnecting = false;
@@ -722,7 +727,10 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
-    if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
+    if (connected) {
+        client.updateProfile(profileFirstName + " " + profileLastName);
+        client.requestContacts();
+    }
 
     while (window.isOpen()) {
         const auto size = window.getSize();
@@ -800,7 +808,8 @@ int main(int argc, char** argv) {
                         const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
                         if (!insideCard) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
                         if (cancelRect.contains({mx,my})) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
-                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
+                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.updateProfile(profileFirstName + " " + profileLastName);
+                            client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
                         editFirstActive = firstRect.contains({mx,my});
                         editLastActive = lastRect.contains({mx,my});
                     }
@@ -932,7 +941,8 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
                             reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -1057,15 +1067,36 @@ int main(int argc, char** argv) {
             connected = reconnectTask.get();
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
-            if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
+            if (connected) {
+                client.updateProfile(profileFirstName + " " + profileLastName);
+                client.requestContacts();
+            }
         }
 
 
-        for (const auto& message : client.consumeMessages()) {
-            addLog(message);
-            if (selectedChat < chats.size()) {
-                chats[selectedChat].messages.push_back(message);
+        static auto lastSync = std::chrono::steady_clock::now() - std::chrono::seconds(3);
+        if (connected && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
+            const auto incoming = client.syncMessages();
+            std::vector<int> acknowledged;
+            for (const auto& message : incoming) {
+                const std::string title = "@" + message.sender;
+                auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
+                    return toLowerAscii(chat.title) == toLowerAscii(title);
+                });
+                if (it == chats.end()) {
+                    chats.push_back(ChatItem{title, {}});
+                    it = std::prev(chats.end());
+                }
+                it->messages.push_back(message.sender + ": " + message.body);
+                acknowledged.push_back(message.id);
+                addLog("[MESSAGE] From @" + message.sender);
             }
+            if (!acknowledged.empty()) {
+                storage.save(chats);
+                if (!client.acknowledge(acknowledged))
+                    addLog("[CLIENT] Message ACK will be retried after reconnect");
+            }
+            lastSync = std::chrono::steady_clock::now();
         }
 
         window.clear(sf::Color(3, 22, 46));
