@@ -71,7 +71,7 @@ Example (Linux/macOS):
 export MESSENGER_USERNAME=alice
 export MESSENGER_DISPLAY_NAME="Alice Example"
 export MESSENGER_PAIRING_CODE="choose-a-long-local-code"
-./messenger 192.168.1.10 5000
+./build/messenger 192.168.1.10 5000
 ```
 
 On Windows PowerShell:
@@ -80,7 +80,7 @@ On Windows PowerShell:
 $env:MESSENGER_USERNAME = "alice"
 $env:MESSENGER_DISPLAY_NAME = "Alice Example"
 $env:MESSENGER_PAIRING_CODE = "choose-a-long-local-code"
-.\\messenger.exe 192.168.1.10 5000
+.\\build\\Release\\messenger.exe 192.168.1.10 5000
 ```
 
 The first successful pairing stores the device ID and device token in
