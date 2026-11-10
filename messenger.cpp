@@ -18,6 +18,7 @@
 #include <future>
 #include <cctype>
 #include <cstdlib>
+#include <iterator>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -794,8 +795,11 @@ int main(int argc, char** argv) {
     const char* envUsername = std::getenv("MESSENGER_USERNAME");
     const char* envDisplayName = std::getenv("MESSENGER_DISPLAY_NAME");
     const char* envPairingCode = std::getenv("MESSENGER_PAIRING_CODE");
-    std::string profileFirstName = envDisplayName ? envDisplayName : "New";
-    std::string profileLastName = "User";
+    const std::string initialDisplayName = envDisplayName ? envDisplayName : "New User";
+    const auto initialNameSplit = initialDisplayName.find(' ');
+    std::string profileFirstName = initialDisplayName.substr(0, initialNameSplit);
+    std::string profileLastName = initialNameSplit == std::string::npos
+        ? "User" : initialDisplayName.substr(initialNameSplit + 1);
     std::string profilePhone = "+7 910 000 0000";
     std::string profileHandle = envUsername ? std::string("@") + envUsername : "@username";
     const std::string pairingCode = envPairingCode ? envPairingCode : "";
