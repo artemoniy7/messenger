@@ -17,6 +17,7 @@
 #include <set>
 #include <future>
 #include <cctype>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -155,42 +156,197 @@ private:
     std::string filename_;
 };
 
+struct ReceivedMessage {
+    int id = 0;
+    std::string sender;
+    std::string body;
+    std::string createdAt;
+};
+
+void appendUtf8(std::string& out, char32_t cp) {
+    if (cp <= 0x7f) out.push_back(static_cast<char>(cp));
+    else if (cp <= 0x7ff) {
+        out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else if (cp <= 0xffff) {
+        out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    } else if (cp <= 0x10ffff) {
+        out.push_back(static_cast<char>(0xf0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+    }
+}
+
+void eraseLastUtf8(std::string& value) {
+    if (value.empty()) return;
+    value.pop_back();
+    while (!value.empty() &&
+           (static_cast<unsigned char>(value.back()) & 0xc0) == 0x80) value.pop_back();
+}
+
+std::string jsonEscape(const std::string& value) {
+    std::string out;
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    const char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0xf];
+                    out += hex[c & 0xf];
+                } else out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+std::string jsonString(const std::string& object, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = object.find(needle);
+    if (p == std::string::npos) return {};
+    p = object.find(':', p + needle.size());
+    if (p == std::string::npos) return {};
+    p = object.find('"', p + 1);
+    if (p == std::string::npos) return {};
+    ++p;
+    std::string out;
+    bool escaped = false;
+    for (; p < object.size(); ++p) {
+        char c = object[p];
+        if (escaped) {
+            switch (c) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                default: out += c; break;
+            }
+            escaped = false;
+        } else if (c == '\\') escaped = true;
+        else if (c == '"') break;
+        else out += c;
+    }
+    return out;
+}
+
+int jsonInt(const std::string& object, const std::string& key, int fallback = 0) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = object.find(needle);
+    if (p == std::string::npos) return fallback;
+    p = object.find(':', p + needle.size());
+    if (p == std::string::npos) return fallback;
+    ++p;
+    while (p < object.size() && std::isspace(static_cast<unsigned char>(object[p]))) ++p;
+    try { return std::stoi(object.substr(p)); } catch (...) { return fallback; }
+}
+
+std::vector<std::string> jsonObjects(const std::string& source, const std::string& key) {
+    const std::string needle = "\"" + key + "\"";
+    std::size_t p = source.find(needle);
+    if (p == std::string::npos) return {};
+    p = source.find('[', p + needle.size());
+    if (p == std::string::npos) return {};
+    std::vector<std::string> result;
+    bool quoted = false, escaped = false;
+    int depth = 0;
+    std::size_t begin = std::string::npos;
+    for (; p < source.size(); ++p) {
+        const char c = source[p];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+            continue;
+        }
+        if (c == '"') { quoted = true; continue; }
+        if (c == '{') {
+            if (depth++ == 0) begin = p;
+        } else if (c == '}' && depth > 0) {
+            if (--depth == 0 && begin != std::string::npos)
+                result.push_back(source.substr(begin, p - begin + 1));
+        } else if (c == ']' && depth == 0) break;
+    }
+    return result;
+}
+
+std::string makeDeviceId() {
+    static const char* hex = "0123456789abcdef";
+    std::string value;
+    static const bool seeded = [] {
+        std::srand(static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count()));
+        return true;
+    }();
+    (void)seeded;
+    for (int i = 0; i < 32; ++i) value += hex[std::rand() % 16];
+    value.insert(8, "-"); value.insert(13, "-"); value.insert(18, "-"); value.insert(23, "-");
+    return value;
+}
+
 class TcpClient {
 public:
     TcpClient() { initSockets(); }
     ~TcpClient() { disconnect(); cleanupSockets(); }
 
-    bool connectTo(std::string_view host, int port, std::string_view username) {
+    bool connectTo(std::string_view host, int port, std::string_view username,
+                   std::string_view displayName, std::string_view pairingCode) {
         disconnect();
         sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock_ == kInvalidSocket) {
-            lastError_ = "socket() failed";
-            return false;
-        }
-
+        if (sock_ == kInvalidSocket) { lastError_ = "socket() failed"; return false; }
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(port));
         if (::inet_pton(AF_INET, std::string(host).c_str(), &addr.sin_addr) <= 0) {
-            lastError_ = "Invalid server IP";
-            disconnect();
-            return false;
+            lastError_ = "Invalid server IP"; disconnect(); return false;
         }
-
         if (::connect(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-            lastError_ = std::string("connect() failed: ") + std::strerror(errno);
-            disconnect();
-            return false;
+            lastError_ = "Connection failed"; disconnect(); return false;
         }
-
         connected_.store(true);
-        if (!sendLine(std::string(username))) {
-            lastError_ = "Failed to send username";
-            disconnect();
-            return false;
+#ifdef _WIN32
+        DWORD timeout = 2500;
+        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+        setsockopt(sock_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+#else
+        timeval timeout{2, 500000};
+        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(sock_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+        loadCredentials();
+        std::string hello = "{\"action\":\"hello\",\"version\":2,\"device_id\":\"" + jsonEscape(deviceId_) + "\"";
+        if (!deviceToken_.empty()) {
+            hello += ",\"device_token\":\"" + jsonEscape(deviceToken_) + "\"";
+        } else {
+            if (username.empty() || displayName.empty() || pairingCode.empty()) {
+                lastError_ = "First run: set MESSENGER_PAIRING_CODE and MESSENGER_USERNAME";
+                disconnect(); return false;
+            }
+            username_ = std::string(username);
+            hello += ",\"username\":\"" + jsonEscape(username_) + "\",\"display_name\":\"" +
+                     jsonEscape(std::string(displayName)) + "\",\"pairing_code\":\"" +
+                     jsonEscape(std::string(pairingCode)) + "\"";
         }
-
-        receiver_ = std::thread([this] { recvLoop(); });
+        hello += "}";
+        std::string response;
+        if (!exchange(hello, response) || jsonString(response, "type") != "welcome") {
+            const std::string code = jsonString(response, "code");
+            lastError_ = code.empty() ? "V2 handshake failed" : code;
+            disconnect(); return false;
+        }
+        const std::string issued = jsonString(response, "device_token");
+        if (!issued.empty()) deviceToken_ = issued;
+        if (username_.empty()) username_ = std::string(username);
+        saveCredentials();
         return true;
     }
 
@@ -198,85 +354,137 @@ public:
         connected_.store(false);
         if (sock_ != kInvalidSocket) {
 #ifdef _WIN32
-            ::shutdown(sock_, SD_BOTH);
-            ::closesocket(sock_);
+            ::shutdown(sock_, SD_BOTH); ::closesocket(sock_);
 #else
-            ::shutdown(sock_, SHUT_RDWR);
-            ::close(sock_);
+            ::shutdown(sock_, SHUT_RDWR); ::close(sock_);
 #endif
             sock_ = kInvalidSocket;
         }
-        if (receiver_.joinable()) receiver_.join();
     }
 
-    bool sendLine(const std::string& line) {
-        if (sock_ == kInvalidSocket) return false;
-        std::string data = line + "\n";
-        return ::send(sock_, data.c_str(), static_cast<int>(data.size()), 0) >= 0;
-    }
-
-    void requestContacts() { sendLine("/users"); }
-
-    std::vector<std::string> consumeMessages() {
+    bool requestContacts() {
+        std::string response;
+        if (!exchange("{\"action\":\"users.list\"}", response)) return false;
+        if (jsonString(response, "type") != "users.list") return false;
+        std::vector<ContactItem> parsed;
+        for (const auto& item : jsonObjects(response, "users")) {
+            const std::string username = jsonString(item, "username");
+            const std::string display = jsonString(item, "display_name");
+            if (username.empty()) continue;
+            ContactItem contact = contactFromUsername(username);
+            if (!display.empty()) {
+                const auto split = display.find(' ');
+                contact.firstName = display.substr(0, split);
+                contact.lastName = split == std::string::npos ? "" : display.substr(split + 1);
+            }
+            parsed.push_back(contact);
+        }
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<std::string> out;
-        out.swap(messages_);
-        return out;
+        contacts_ = std::move(parsed);
+        return true;
+    }
+
+    bool updateProfile(const std::string& displayName) {
+        std::string response;
+        return exchange("{\"action\":\"profile.update\",\"display_name\":\"" +
+                        jsonEscape(displayName) + "\"}", response) &&
+               jsonString(response, "type") == "profile.updated";
+    }
+
+    bool sendMessage(const std::string& recipient, const std::string& body) {
+        if (recipient.empty() || body.empty()) return false;
+        const std::string id = makeDeviceId();
+        std::string response;
+        const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
+            jsonEscape(usernameFromHandle(recipient)) + "\",\"body\":\"" + jsonEscape(body) +
+            "\",\"client_message_id\":\"" + id + "\"}";
+        if (!exchange(request, response)) return false;
+        if (jsonString(response, "type") != "message.accepted") {
+            lastError_ = jsonString(response, "code");
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<ReceivedMessage> syncMessages() {
+        std::string response;
+        if (!exchange("{\"action\":\"messages.sync\",\"limit\":100}", response) ||
+            jsonString(response, "type") != "messages.sync") return {};
+        std::vector<ReceivedMessage> result;
+        for (const auto& item : jsonObjects(response, "messages")) {
+            ReceivedMessage message;
+            message.id = jsonInt(item, "id");
+            message.sender = jsonString(item, "sender");
+            message.body = jsonString(item, "body");
+            message.createdAt = jsonString(item, "created_at");
+            if (message.id > 0) result.push_back(std::move(message));
+        }
+        return result;
+    }
+
+    bool acknowledge(const std::vector<int>& ids) {
+        if (ids.empty()) return true;
+        std::string list = "[";
+        for (std::size_t i = 0; i < ids.size(); ++i) {
+            if (i) list += ",";
+            list += std::to_string(ids[i]);
+        }
+        list += "]";
+        std::string response;
+        return exchange("{\"action\":\"messages.ack\",\"message_ids\":" + list + "}", response) &&
+               jsonString(response, "type") == "messages.acknowledged";
     }
 
     std::vector<ContactItem> contacts() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return contacts_;
     }
-
     bool isConnected() const { return connected_.load(); }
     std::string lastError() const { return lastError_; }
 
 private:
-    void recvLoop() {
-        std::string buffer;
-        char chunk[1024];
-        while (connected_.load()) {
-            int n = static_cast<int>(::recv(sock_, chunk, sizeof(chunk), 0));
-            if (n <= 0) {
-                connected_.store(false);
-                break;
-            }
-
-            buffer.append(chunk, chunk + n);
-            std::size_t pos = 0;
-            while ((pos = buffer.find('\n')) != std::string::npos) {
-                std::string line = buffer.substr(0, pos);
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (line.rfind("USERS ", 0) == 0) {
-                        contacts_.clear();
-                        std::string users = line.substr(6);
-                        std::size_t start = 0;
-                        while (start <= users.size()) {
-                            const std::size_t sep = users.find('|', start);
-                            std::string name = users.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
-                            if (!name.empty()) contacts_.push_back(contactFromServerEntry(name));
-                            if (sep == std::string::npos) break;
-                            start = sep + 1;
-                        }
-                    } else {
-                        messages_.push_back(line);
-                    }
-                }
-                buffer.erase(0, pos + 1);
-            }
+    bool exchange(const std::string& request, std::string& response) {
+        if (sock_ == kInvalidSocket || !connected_.load()) return false;
+        const std::string frame = request + "\n";
+        std::size_t sent = 0;
+        while (sent < frame.size()) {
+            const int n = static_cast<int>(::send(sock_, frame.data() + sent,
+                                                  static_cast<int>(frame.size() - sent), 0));
+            if (n <= 0) { connected_.store(false); lastError_ = "Send failed"; return false; }
+            sent += static_cast<std::size_t>(n);
         }
+        response.clear();
+        char c = 0;
+        while (response.size() <= 64 * 1024) {
+            const int n = static_cast<int>(::recv(sock_, &c, 1, 0));
+            if (n <= 0) { connected_.store(false); lastError_ = "Server response timeout or disconnect"; return false; }
+            if (c == '\n') return true;
+            if (c != '\r') response += c;
+        }
+        connected_.store(false);
+        lastError_ = "Server frame too large";
+        return false;
+    }
+
+    void loadCredentials() {
+        std::ifstream in(".messenger_device");
+        if (in) {
+            std::getline(in, deviceId_);
+            std::getline(in, deviceToken_);
+            std::getline(in, username_);
+        }
+        if (deviceId_.empty()) deviceId_ = makeDeviceId();
+    }
+    void saveCredentials() {
+        std::ofstream out(".messenger_device", std::ios::trunc);
+        if (out) out << deviceId_ << "\n" << deviceToken_ << "\n" << username_ << "\n";
     }
 
     static void initSockets() {
 #ifdef _WIN32
-        WSADATA data{};
-        WSAStartup(MAKEWORD(2, 2), &data);
+        WSADATA data{}; WSAStartup(MAKEWORD(2, 2), &data);
 #endif
     }
-
     static void cleanupSockets() {
 #ifdef _WIN32
         WSACleanup();
@@ -285,12 +493,12 @@ private:
 
     SocketHandle sock_ = kInvalidSocket;
     std::atomic<bool> connected_{false};
-    std::thread receiver_;
     mutable std::mutex mutex_;
-    std::vector<std::string> messages_;
     std::vector<ContactItem> contacts_;
     std::string lastError_;
+    std::string deviceId_, deviceToken_, username_;
 };
+
 
 float clampf(float v, float a, float b) { return std::max(a, std::min(v, b)); }
 
@@ -399,7 +607,7 @@ std::string discoverServerIp(int port) {
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
         std::array<const char*, 8> broadcasts = {"255.255.255.255", "192.168.0.255", "192.168.1.255", "192.168.43.255", "10.0.0.255", "10.0.1.255", "172.16.0.255", "172.20.10.255"};
-        const char* q = "MESSENGER_DISCOVER";
+        const char* q = "MESSENGER_DISCOVER_V2";
         for (const char* b : broadcasts) {
             sockaddr_in dst{};
             dst.sin_family = AF_INET;
@@ -507,10 +715,14 @@ int main(int argc, char** argv) {
     std::string contactsSearch;
     bool profileOpen = false;
     float profileAnim = 0.f;
-    std::string profileFirstName = "Username";
+    const char* envUsername = std::getenv("MESSENGER_USERNAME");
+    const char* envDisplayName = std::getenv("MESSENGER_DISPLAY_NAME");
+    const char* envPairingCode = std::getenv("MESSENGER_PAIRING_CODE");
+    std::string profileFirstName = envDisplayName ? envDisplayName : "New";
     std::string profileLastName = "User";
     std::string profilePhone = "+7 910 000 0000";
-    std::string profileHandle = "@username";
+    std::string profileHandle = envUsername ? std::string("@") + envUsername : "@username";
+    const std::string pairingCode = envPairingCode ? envPairingCode : "";
     std::string profileBio = "I like coding and music";
     bool editProfileOpen = false;
     float editProfileAnim = 0.f;
@@ -532,9 +744,12 @@ int main(int argc, char** argv) {
         "Language", "Saved messages"};
 
     TcpClient client;
-    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+    bool connected = client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                      profileFirstName + " " + profileLastName, pairingCode);
 
     std::vector<std::string> serverLog;
+    std::string messageDraft;
+    bool messageInputActive = false;
     bool reconnecting = false;
     std::future<bool> reconnectTask;
     auto addLog = [&](const std::string& line) {
@@ -543,7 +758,10 @@ int main(int argc, char** argv) {
     };
     addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
     addLog(connected ? "[CLIENT] Connected" : "[CLIENT] Connection failed: " + client.lastError());
-    if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
+    if (connected) {
+        client.updateProfile(profileFirstName + " " + profileLastName);
+        client.requestContacts();
+    }
 
     while (window.isOpen()) {
         const auto size = window.getSize();
@@ -561,6 +779,22 @@ int main(int argc, char** argv) {
                 window.close();
             }
             if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (messageInputActive && !editFirstActive && !editLastActive &&
+                    !contactsSearchActive && !serverIpInputActive && !serverPortInputActive) {
+                    const char32_t code = textEntered->unicode;
+                    if (code == 8) { eraseLastUtf8(messageDraft); }
+                    else if (code == 13 || code == 10) {
+                        if (connected && selectedChat < chats.size() && !messageDraft.empty()) {
+                            if (client.sendMessage(chats[selectedChat].title, messageDraft)) {
+                                chats[selectedChat].messages.push_back("You: " + messageDraft);
+                                storage.save(chats);
+                                messageDraft.clear();
+                            } else addLog("[CLIENT] Send failed: " + client.lastError());
+                        }
+                    } else if (code >= 32 && code != 127 && messageDraft.size() < 8000) {
+                        appendUtf8(messageDraft, code);
+                    }
+                }
                 if (editFirstActive || editLastActive) {
                     const char32_t code = textEntered->unicode;
                     std::string* target = editFirstActive ? &draftFirstName : &draftLastName;
@@ -600,6 +834,16 @@ int main(int argc, char** argv) {
                     const float mx = static_cast<float>(pressed->position.x);
                     const float my = static_cast<float>(pressed->position.y);
 
+                    const sf::FloatRect inputHit({leftW + 18.f * uiScale, static_cast<float>(size.y) - 58.f * uiScale},
+                                                    {static_cast<float>(size.x) - leftW - 36.f * uiScale, 42.f * uiScale});
+                    if (inputHit.contains({mx, my}) && selectedChat < chats.size()) {
+                        messageInputActive = true;
+                        contactsSearchActive = false;
+                        continue;
+                    } else if (!inputHit.contains({mx, my})) {
+                        messageInputActive = false;
+                    }
+
                     const bool onSettingsButton = (mx >= 8.f * uiScale && mx <= leftW - 8.f * uiScale && my >= 12.f * uiScale && my <= 12.f * uiScale + settingsBtnH);
                     if (onSettingsButton) {
                         settingsOpen = true;
@@ -621,7 +865,8 @@ int main(int argc, char** argv) {
                         const bool insideCard = (mx >= cardX && mx <= cardX + cardW && my >= cardY && my <= cardY + cardH);
                         if (!insideCard) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
                         if (cancelRect.contains({mx,my})) { editProfileOpen = false; editFirstActive = editLastActive = false; continue; }
-                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
+                        if (saveRect.contains({mx,my})) { profileFirstName = draftFirstName.empty()?profileFirstName:draftFirstName; profileLastName = draftLastName.empty()?profileLastName:draftLastName; client.updateProfile(profileFirstName + " " + profileLastName);
+                            client.requestContacts(); editProfileOpen=false; editFirstActive=editLastActive=false; continue; }
                         editFirstActive = firstRect.contains({mx,my});
                         editLastActive = lastRect.contains({mx,my});
                     }
@@ -752,8 +997,9 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -787,8 +1033,9 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -822,8 +1069,9 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
-                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle));
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
+                                return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
+                                    profileFirstName + " " + profileLastName, pairingCode);
                             });
                         } else if (cancelRect.contains({mx, my})) {
                             serverIpDraft = serverIp;
@@ -853,7 +1101,31 @@ int main(int argc, char** argv) {
                         const bool insideContacts = mx >= leftW && mx <= leftW + panelW;
                         if (searchRect.contains({mx, my})) {
                             contactsSearchActive = true;
-                        } else if (!insideContacts) {
+                        } else if (insideContacts) {
+                            contactsSearchActive = false;
+                            float rowY = 122.f * uiScale;
+                            const auto people = client.contacts();
+                            const std::string filter = toLowerAscii(contactsSearch);
+                            for (const auto& person : people) {
+                                const std::string haystack = toLowerAscii(person.firstName + " " + person.lastName + " " + person.username);
+                                if (!filter.empty() && haystack.find(filter) == std::string::npos) continue;
+                                const sf::FloatRect rowRect({leftW, rowY}, {panelW, 58.f * uiScale});
+                                if (rowRect.contains({mx, my})) {
+                                    const std::string title = person.username;
+                                    auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
+                                        return toLowerAscii(chat.title) == toLowerAscii(title);
+                                    });
+                                    if (it == chats.end()) {
+                                        chats.push_back(ChatItem{title, {}});
+                                        selectedChat = chats.size() - 1;
+                                    } else selectedChat = static_cast<std::size_t>(std::distance(chats.begin(), it));
+                                    contactsOpen = false;
+                                    messageInputActive = true;
+                                    break;
+                                }
+                                rowY += 64.f * uiScale;
+                            }
+                        } else {
                             contactsSearchActive = false;
                         }
                     }
@@ -878,15 +1150,36 @@ int main(int argc, char** argv) {
             connected = reconnectTask.get();
             reconnecting = false;
             addLog(connected ? "[CLIENT] Reconnected" : "[CLIENT] Connection failed: " + client.lastError());
-            if (connected) { client.sendLine(formatProfileCommand(profileFirstName, profileLastName, profileHandle)); client.requestContacts(); }
+            if (connected) {
+                client.updateProfile(profileFirstName + " " + profileLastName);
+                client.requestContacts();
+            }
         }
 
 
-        for (const auto& message : client.consumeMessages()) {
-            addLog(message);
-            if (selectedChat < chats.size()) {
-                chats[selectedChat].messages.push_back(message);
+        static auto lastSync = std::chrono::steady_clock::now() - std::chrono::seconds(3);
+        if (connected && !reconnecting && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
+            const auto incoming = client.syncMessages();
+            std::vector<int> acknowledged;
+            for (const auto& message : incoming) {
+                const std::string title = "@" + message.sender;
+                auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
+                    return toLowerAscii(chat.title) == toLowerAscii(title);
+                });
+                if (it == chats.end()) {
+                    chats.push_back(ChatItem{title, {}});
+                    it = std::prev(chats.end());
+                }
+                it->messages.push_back(message.sender + ": " + message.body);
+                acknowledged.push_back(message.id);
+                addLog("[MESSAGE] From @" + message.sender);
             }
+            if (!acknowledged.empty()) {
+                storage.save(chats);
+                if (!client.acknowledge(acknowledged))
+                    addLog("[CLIENT] Message ACK will be retried after reconnect");
+            }
+            lastSync = std::chrono::steady_clock::now();
         }
 
         window.clear(sf::Color(3, 22, 46));
@@ -922,6 +1215,16 @@ int main(int argc, char** argv) {
         workspace.setPosition({chatX, 0.f});
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
+
+        const sf::FloatRect composerRect({chatX + 18.f * uiScale, static_cast<float>(size.y) - 58.f * uiScale},
+                                         {static_cast<float>(size.x) - chatX - 36.f * uiScale, 42.f * uiScale});
+        drawRoundedRect(window, composerRect, 12.f * uiScale, sf::Color(18, 36, 55));
+        sf::Text composerText(font, selectedChat < chats.size()
+            ? (messageDraft.empty() ? "Write a message... (Enter to send)" : messageDraft)
+            : "Choose a contact to start chatting", fontSize(14, uiScale));
+        composerText.setFillColor(messageDraft.empty() ? sf::Color(125, 154, 180) : sf::Color(226, 238, 249));
+        composerText.setPosition({composerRect.position.x + 14.f * uiScale, composerRect.position.y + 11.f * uiScale});
+        window.draw(composerText);
 
         float y = 28.f * uiScale;
         if (selectedChat < chats.size() && !chats[selectedChat].messages.empty()) {
