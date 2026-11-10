@@ -578,7 +578,7 @@ std::string discoverServerIp(int port) {
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
         std::array<const char*, 8> broadcasts = {"255.255.255.255", "192.168.0.255", "192.168.1.255", "192.168.43.255", "10.0.0.255", "10.0.1.255", "172.16.0.255", "172.20.10.255"};
-        const char* q = "MESSENGER_DISCOVER";
+        const char* q = "MESSENGER_DISCOVER_V2";
         for (const char* b : broadcasts) {
             sockaddr_in dst{};
             dst.sin_family = AF_INET;
@@ -719,6 +719,8 @@ int main(int argc, char** argv) {
                                       profileFirstName + " " + profileLastName, pairingCode);
 
     std::vector<std::string> serverLog;
+    std::string messageDraft;
+    bool messageInputActive = false;
     bool reconnecting = false;
     std::future<bool> reconnectTask;
     auto addLog = [&](const std::string& line) {
@@ -748,6 +750,22 @@ int main(int argc, char** argv) {
                 window.close();
             }
             if (const auto* textEntered = event->getIf<sf::Event::TextEntered>()) {
+                if (messageInputActive && !editFirstActive && !editLastActive &&
+                    !contactsSearchActive && !serverIpInputActive && !serverPortInputActive) {
+                    const char32_t code = textEntered->unicode;
+                    if (code == 8) { if (!messageDraft.empty()) messageDraft.pop_back(); }
+                    else if (code == 13 || code == 10) {
+                        if (connected && selectedChat < chats.size() && !messageDraft.empty()) {
+                            if (client.sendMessage(chats[selectedChat].title, messageDraft)) {
+                                chats[selectedChat].messages.push_back("You: " + messageDraft);
+                                storage.save(chats);
+                                messageDraft.clear();
+                            } else addLog("[CLIENT] Send failed: " + client.lastError());
+                        }
+                    } else if (code >= 32 && code < 127 && messageDraft.size() < 2000) {
+                        messageDraft.push_back(static_cast<char>(code));
+                    }
+                }
                 if (editFirstActive || editLastActive) {
                     const char32_t code = textEntered->unicode;
                     std::string* target = editFirstActive ? &draftFirstName : &draftLastName;
@@ -786,6 +804,16 @@ int main(int argc, char** argv) {
                 if (pressed->button == sf::Mouse::Button::Left) {
                     const float mx = static_cast<float>(pressed->position.x);
                     const float my = static_cast<float>(pressed->position.y);
+
+                    const sf::FloatRect inputHit({leftW + 18.f * uiScale, static_cast<float>(size.y) - 58.f * uiScale},
+                                                    {static_cast<float>(size.x) - leftW - 36.f * uiScale, 42.f * uiScale});
+                    if (inputHit.contains({mx, my}) && selectedChat < chats.size()) {
+                        messageInputActive = true;
+                        contactsSearchActive = false;
+                        continue;
+                    } else if (!inputHit.contains({mx, my})) {
+                        messageInputActive = false;
+                    }
 
                     const bool onSettingsButton = (mx >= 8.f * uiScale && mx <= leftW - 8.f * uiScale && my >= 12.f * uiScale && my <= 12.f * uiScale + settingsBtnH);
                     if (onSettingsButton) {
@@ -940,7 +968,7 @@ int main(int argc, char** argv) {
                             addLog("[CLIENT] Target: " + serverIp + ":" + std::to_string(serverPort));
                             addLog("[CLIENT] Reconnecting...");
                             reconnecting = true;
-                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle] {
+                            reconnectTask = std::async(std::launch::async, [&client, &serverIp, &serverPort, &profileHandle, &profileFirstName, &profileLastName, &pairingCode] {
                                 return client.connectTo(serverIp, serverPort, usernameFromHandle(profileHandle),
                                     profileFirstName + " " + profileLastName, pairingCode);
                             });
@@ -1042,7 +1070,31 @@ int main(int argc, char** argv) {
                         const bool insideContacts = mx >= leftW && mx <= leftW + panelW;
                         if (searchRect.contains({mx, my})) {
                             contactsSearchActive = true;
-                        } else if (!insideContacts) {
+                        } else if (insideContacts) {
+                            contactsSearchActive = false;
+                            float rowY = 122.f * uiScale;
+                            const auto people = client.contacts();
+                            const std::string filter = toLowerAscii(contactsSearch);
+                            for (const auto& person : people) {
+                                const std::string haystack = toLowerAscii(person.firstName + " " + person.lastName + " " + person.username);
+                                if (!filter.empty() && haystack.find(filter) == std::string::npos) continue;
+                                const sf::FloatRect rowRect({leftW, rowY}, {panelW, 58.f * uiScale});
+                                if (rowRect.contains({mx, my})) {
+                                    const std::string title = person.username;
+                                    auto it = std::find_if(chats.begin(), chats.end(), [&](const ChatItem& chat) {
+                                        return toLowerAscii(chat.title) == toLowerAscii(title);
+                                    });
+                                    if (it == chats.end()) {
+                                        chats.push_back(ChatItem{title, {}});
+                                        selectedChat = chats.size() - 1;
+                                    } else selectedChat = static_cast<std::size_t>(std::distance(chats.begin(), it));
+                                    contactsOpen = false;
+                                    messageInputActive = true;
+                                    break;
+                                }
+                                rowY += 64.f * uiScale;
+                            }
+                        } else {
                             contactsSearchActive = false;
                         }
                     }
@@ -1132,6 +1184,16 @@ int main(int argc, char** argv) {
         workspace.setPosition({chatX, 0.f});
         workspace.setFillColor(sf::Color(1, 17, 37));
         window.draw(workspace);
+
+        const sf::FloatRect composerRect({chatX + 18.f * uiScale, static_cast<float>(size.y) - 58.f * uiScale},
+                                         {static_cast<float>(size.x) - chatX - 36.f * uiScale, 42.f * uiScale});
+        drawRoundedRect(window, composerRect, 12.f * uiScale, sf::Color(18, 36, 55));
+        sf::Text composerText(font, selectedChat < chats.size()
+            ? (messageDraft.empty() ? "Write a message... (Enter to send)" : messageDraft)
+            : "Choose a contact to start chatting", fontSize(14, uiScale));
+        composerText.setFillColor(messageDraft.empty() ? sf::Color(125, 154, 180) : sf::Color(226, 238, 249));
+        composerText.setPosition({composerRect.position.x + 14.f * uiScale, composerRect.position.y + 11.f * uiScale});
+        window.draw(composerText);
 
         float y = 28.f * uiScale;
         if (selectedChat < chats.size() && !chats[selectedChat].messages.empty()) {
