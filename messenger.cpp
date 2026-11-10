@@ -294,6 +294,11 @@ std::string makeDeviceId() {
 }
 
 class TcpClient {
+    struct PendingOutgoing {
+        std::string id;
+        std::string recipient;
+        std::string body;
+    };
 public:
     TcpClient() { initSockets(); }
     ~TcpClient() { disconnect(); cleanupSockets(); }
@@ -393,17 +398,40 @@ public:
 
     bool sendMessage(const std::string& recipient, const std::string& body) {
         if (recipient.empty() || body.empty()) return false;
-        const std::string id = makeDeviceId();
-        std::string response;
-        const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
-            jsonEscape(usernameFromHandle(recipient)) + "\",\"body\":\"" + jsonEscape(body) +
-            "\",\"client_message_id\":\"" + id + "\"}";
-        if (!exchange(request, response)) return false;
-        if (jsonString(response, "type") != "message.accepted") {
-            lastError_ = jsonString(response, "code");
-            return false;
+        PendingOutgoing item{makeDeviceId(), usernameFromHandle(recipient), body};
+        auto queue = loadOutbox();
+        queue.push_back(item);
+        saveOutbox(queue);
+        flushOutbox();
+        return true; // queued locally; server delivery is retried on the next sync
+    }
+
+    std::size_t flushOutbox() {
+        if (!connected_.load()) return 0;
+        auto queue = loadOutbox();
+        std::vector<PendingOutgoing> remaining;
+        std::size_t accepted = 0;
+        for (const auto& item : queue) {
+            std::string response;
+            const std::string request = "{\"action\":\"message.send\",\"recipient\":\"" +
+                jsonEscape(item.recipient) + "\",\"body\":\"" + jsonEscape(item.body) +
+                "\",\"client_message_id\":\"" + jsonEscape(item.id) + "\"}";
+            if (exchange(request, response) && jsonString(response, "type") == "message.accepted") {
+                ++accepted;
+            } else {
+                remaining.push_back(item);
+                if (!connected_.load()) {
+                    for (const auto& later : queue) {
+                        if (later.id == item.id) continue;
+                        if (std::none_of(remaining.begin(), remaining.end(), [&](const PendingOutgoing& x) { return x.id == later.id; }))
+                            remaining.push_back(later);
+                    }
+                    break;
+                }
+            }
         }
-        return true;
+        saveOutbox(remaining);
+        return accepted;
     }
 
     std::vector<ReceivedMessage> syncMessages() {
@@ -443,6 +471,49 @@ public:
     std::string lastError() const { return lastError_; }
 
 private:
+    static std::string hexEncode(const std::string& value) {
+        static const char digits[] = "0123456789abcdef";
+        std::string out;
+        out.reserve(value.size() * 2);
+        for (unsigned char c : value) { out += digits[c >> 4]; out += digits[c & 15]; }
+        return out;
+    }
+    static std::string hexDecode(const std::string& value) {
+        auto digit = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        std::string out;
+        if (value.size() % 2) return out;
+        for (std::size_t i = 0; i < value.size(); i += 2) {
+            int hi = digit(value[i]), lo = digit(value[i + 1]);
+            if (hi < 0 || lo < 0) return {};
+            out.push_back(static_cast<char>((hi << 4) | lo));
+        }
+        return out;
+    }
+    std::vector<PendingOutgoing> loadOutbox() const {
+        std::vector<PendingOutgoing> items;
+        std::ifstream in(".messenger_outbox");
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto a = line.find('\t');
+            const auto b = a == std::string::npos ? a : line.find('\t', a + 1);
+            if (a == std::string::npos || b == std::string::npos) continue;
+            PendingOutgoing item{line.substr(0, a), hexDecode(line.substr(a + 1, b - a - 1)),
+                                 hexDecode(line.substr(b + 1))};
+            if (!item.id.empty() && !item.recipient.empty() && !item.body.empty()) items.push_back(std::move(item));
+        }
+        return items;
+    }
+    void saveOutbox(const std::vector<PendingOutgoing>& items) const {
+        std::ofstream out(".messenger_outbox", std::ios::trunc);
+        for (const auto& item : items)
+            out << item.id << '\t' << hexEncode(item.recipient) << '\t' << hexEncode(item.body) << "\n";
+    }
+
     bool exchange(const std::string& request, std::string& response) {
         if (sock_ == kInvalidSocket || !connected_.load()) return false;
         const std::string frame = request + "\n";
@@ -1159,6 +1230,7 @@ int main(int argc, char** argv) {
 
         static auto lastSync = std::chrono::steady_clock::now() - std::chrono::seconds(3);
         if (connected && !reconnecting && std::chrono::steady_clock::now() - lastSync >= std::chrono::seconds(2)) {
+            client.flushOutbox();
             const auto incoming = client.syncMessages();
             std::vector<int> acknowledged;
             for (const auto& message : incoming) {
