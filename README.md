@@ -45,6 +45,18 @@ python client_v2.py --host 192.168.1.10 profile "Alice Example"
 
 For a TLS server signed by a private CA, add `--ca-file path/to/ca.pem` before the subcommand. Do not disable certificate verification on untrusted networks.
 
+## Build the SFML desktop client
+
+The desktop application uses **SFML 3** and CMake 3.20+.
+
+```bash
+cmake -S . -B build
+cmake --build build --config Release
+```
+
+If SFML 3 is installed in a non-standard location, pass its prefix with
+`-DCMAKE_PREFIX_PATH=/path/to/SFML`.
+
 ## SFML desktop client (v2)
 
 The SFML application reads first-device enrollment settings from environment variables:
