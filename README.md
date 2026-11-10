@@ -85,8 +85,9 @@ $env:MESSENGER_PAIRING_CODE = "choose-a-long-local-code"
 
 The first successful pairing stores the device ID and device token in
 `.messenger_device` in the application's working directory. Protect this file like a password; do not commit or share it. The
-`.messenger_outbox` file may contain message text that has not yet reached the server;
-keep it private as well. Later launches reuse the stored device token.
+`.messenger_outbox` file may contain message text that has not yet reached the server,
+and `.messenger_received_ids` tracks already-saved server messages to prevent duplicates
+when an ACK must be retried; keep these files private as well. Later launches reuse the stored device token.
 If no server IP is supplied, the client broadcasts the v2 discovery request on the LAN.
 
 Open **Settings → Contacts**, select a user, then type in the message field and press
